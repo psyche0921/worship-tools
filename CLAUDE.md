@@ -35,4 +35,11 @@ pip install playwright pypdf   # Chromium 필요
 python3 tests/e2e.py           # 정적 서버를 띄우고 Gemini/YouTube/Google 로그인은 가짜 응답으로 대체
 ```
 
+v2 서버(`server/`, FastAPI + SQLite) 테스트:
+
+```bash
+python3 -m venv .venv && .venv/Scripts/python -m pip install -r server/requirements-dev.txt
+.venv/Scripts/python -m pytest -q   # Google ID 토큰 검증은 tests/conftest.py의 가짜로 대체
+```
+
 `tests/fixtures/`에는 실제 단톡방 메시지 형식의 샘플과, `#t=` 표기가 섞인 쇼츠 응답 샘플이 있습니다.
