@@ -122,6 +122,7 @@ jobs     (id TEXT PK, kind TEXT, status TEXT, input_json TEXT, result_json TEXT,
 
 | 메서드 · 경로 | 권한 | 내용 |
 |---|---|---|
+| `GET /api/health` | 누구나 | 배포 확인용 |
 | `GET /api/config` | 누구나 | `{clientId}`. 로그인 버튼을 그리는 데 필요 |
 | `POST /api/auth/google` | 누구나 | `{credential}` → 세션 쿠키 |
 | `POST /api/auth/logout` | 로그인 | 세션 삭제 |
@@ -131,9 +132,9 @@ jobs     (id TEXT PK, kind TEXT, status TEXT, input_json TEXT, result_json TEXT,
 | `GET /api/shorts?before=` | 로그인 | 목록(최신순, 20개씩). 원문 없이 메타만 |
 | `GET /api/shorts/{id}` | 로그인 | 원문 포함 |
 | `DELETE /api/shorts/{id}` | 만든 사람 · 관리자 | 삭제 |
-| `GET /api/setlists`, `GET /api/setlists/{id}` | 관리자 | 목록 / 상세 |
+| `GET /api/setlists`, `GET /api/setlists/{재생목록 ID}` | 관리자 | 목록 / 상세(원본 메시지 포함) |
 | `POST /api/setlists` | 관리자 | 재생목록을 만든 뒤 결과 저장(원본 메시지 포함) |
-| `DELETE /api/setlists/{id}` | 관리자 | 기록 삭제(YouTube 재생목록은 지우지 않음) |
+| `DELETE /api/setlists/{재생목록 ID}` | 관리자 | 기록 삭제(YouTube 재생목록은 지우지 않음) |
 | `GET/PUT /api/settings` | 관리자 | SKILL.md, 모델 |
 | `GET/POST/DELETE /api/members` | 관리자 | 허용 이메일 관리(관리자 자신은 삭제 불가) |
 | `POST /api/import` | 관리자 | v1 기록 JSON 가져오기 |

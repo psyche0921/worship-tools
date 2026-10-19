@@ -1,0 +1,18 @@
+# 170번 서버에서 deploy/deploy.sh 로 실행한다(HOST_UID/HOST_GID를 넘겨 data/ 소유자와 맞춘다).
+name: worship
+
+services:
+  web:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    image: worship-web:latest
+    restart: unless-stopped
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    env_file: .env
+    environment:
+      DB_PATH: /data/worship.db
+    ports:
+      - "127.0.0.1:8830:8000"   # nginx(bbc.ppsoft.kr)만 접근
+    volumes:
+      - ../data:/data:Z          # SQLite와 백업. SELinux 라벨(:Z)
