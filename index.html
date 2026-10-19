@@ -78,6 +78,26 @@ a.ts{color:var(--accent);font-weight:600;text-decoration:none;white-space:nowrap
 .card-tools{display:flex;justify-content:flex-end;margin-top:8px}
 .card-tools button{padding:7px 12px;font-size:.85rem}
 .note{font-size:.8rem;color:var(--warn);margin:0 0 10px}
+.list{margin:.4em 0}
+.li{display:flex;gap:.45em;margin:.25em 0;padding-left:calc(var(--ind) * 1.2em)}
+.li .mk{flex:none;min-width:.9em;color:var(--muted)}
+.li > div{min-width:0}
+a.lnk{color:var(--accent);text-decoration:none;word-break:break-all}
+.view-head .vh-title,.vh-title{font-weight:700;font-size:1.05rem;word-break:keep-all}
+.vh-meta{font-size:.82rem;color:var(--muted);margin-top:2px}
+.hist summary{display:flex;align-items:center;gap:8px;list-style:none}
+.hist summary::-webkit-details-marker{display:none}
+.hist summary::before{content:'▸';color:var(--muted);transition:transform .15s}
+.hist[open] summary::before{transform:rotate(90deg)}
+.hc{font-size:.75rem;font-weight:600;color:var(--muted);background:var(--input);border:1px solid var(--line);border-radius:99px;padding:0 8px}
+.hrow{display:flex;gap:8px;align-items:stretch;border-top:1px solid var(--line);padding:8px 0}
+.hrow:first-child{border-top:0}
+.hrow .hopen{flex:1;min-width:0;background:transparent;color:var(--text);padding:6px 8px;text-align:left;display:flex;flex-direction:column;align-items:flex-start;gap:2px;font-weight:600;border-radius:8px}
+.hrow.active .hopen{background:var(--input);box-shadow:inset 3px 0 0 var(--accent)}
+.hrow .ht{word-break:keep-all}
+.hrow .hm{font-size:.78rem;font-weight:400;color:var(--muted)}
+.hrow .hdel{flex:none;padding:6px 12px;font-size:.82rem}
+.hrow .hdel.confirm{background:var(--err);color:#fff;border-color:var(--err)}
 </style>
 </head>
 <body>
@@ -121,6 +141,12 @@ a.ts{color:var(--accent);font-weight:600;text-decoration:none;white-space:nowrap
     </div>
   </div>
 
+  <details class="card hist">
+    <summary>작업 기록 <span class="hc" id="histCount-setlist">0</span></summary>
+    <p class="hint">만든 재생목록을 다시 열어 링크를 복사할 수 있어요. 기록을 지워도 유튜브 재생목록은 그대로 남아요.</p>
+    <div id="hist-setlist"></div>
+  </details>
+  <div id="setlistView"></div>
   <div id="blocks"></div>
   </section>
 
@@ -140,6 +166,11 @@ a.ts{color:var(--accent);font-weight:600;text-decoration:none;white-space:nowrap
       <div class="row"><button id="planBtn">쇼츠 기획</button></div>
       <div class="msg" id="shortsMsg"></div>
     </div>
+    <details class="card hist">
+      <summary>작업 기록 <span class="hc" id="histCount-shorts">0</span></summary>
+      <p class="hint">지난 쇼츠 기획을 다시 열거나 PDF로 공유할 수 있어요.</p>
+      <div id="hist-shorts"></div>
+    </details>
     <div id="shortsOut"></div>
   </section>
 </main>
@@ -349,6 +380,31 @@ async function yt(path, body){
 }
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+/* ---------- 재생목록 결과 (생성 직후/기록 공용) ---------- */
+function playlistResultHtml(title, url){
+  return `<div class="result">
+      <div class="rtitle">${esc(title)} · 일부 공개</div>
+      <input class="link" value="${esc(url)}" readonly>
+      <div class="row">
+        <button class="copy">링크 복사</button>
+        <button class="ghost share">카톡 등으로 공유</button>
+      </div>
+      <div class="row"><a class="btn ghost" href="${esc(url)}" target="_blank" rel="noopener">유튜브에서 열기</a></div>
+    </div>`;
+}
+function bindPlaylistResult(box, title, url){
+  box.querySelector('.copy').onclick = async e => {
+    const b = e.currentTarget;
+    try{ await navigator.clipboard.writeText(url); }
+    catch(_){ const f = box.querySelector('.link'); f.select(); try{ document.execCommand('copy'); }catch(__){ prompt('링크를 복사하세요', url); return; } }
+    b.textContent = '복사됨 ✓'; setTimeout(() => b.textContent = '링크 복사', 2000);
+  };
+  box.querySelector('.share').onclick = async () => {
+    if(navigator.share){ try{ await navigator.share({title, url}); }catch(_){} }
+    else { try{ await navigator.clipboard.writeText(url); }catch(_){ prompt('링크를 복사하세요', url); } }
+  };
+}
+
 /* ---------- 재생목록 생성 ---------- */
 async function createPlaylist(bi, btn){
   const card = btn.closest('[data-b]');
@@ -389,26 +445,13 @@ async function createPlaylist(bi, btn){
     }
 
     const url = 'https://www.youtube.com/playlist?list=' + pl.id;
-    msg.textContent = `${block.songs.length}곡 중 ${ok}곡 추가 완료`;
-    out.innerHTML = `<div class="result">
-        <div class="rtitle">${esc(title)} · 일부 공개</div>
-        <input class="link" value="${url}" readonly>
-        <div class="row">
-          <button class="copy">링크 복사</button>
-          <button class="ghost share">카톡 등으로 공유</button>
-        </div>
-        <div class="row"><a class="btn ghost" href="${url}" target="_blank" rel="noopener">유튜브에서 열기</a></div>
-      </div>`;
-    out.querySelector('.copy').onclick = async e => {
-      const b = e.currentTarget;
-      try{ await navigator.clipboard.writeText(url); }
-      catch(_){ const f = out.querySelector('.link'); f.select(); try{ document.execCommand('copy'); }catch(__){ prompt('링크를 복사하세요', url); return; } }
-      b.textContent = '복사됨 ✓'; setTimeout(() => b.textContent = '링크 복사', 2000);
-    };
-    out.querySelector('.share').onclick = async () => {
-      if(navigator.share){ try{ await navigator.share({title, url}); }catch(_){} }
-      else { try{ await navigator.clipboard.writeText(url); }catch(_){ prompt('링크를 복사하세요', url); } }
-    };
+    msg.textContent = `${block.songs.length}곡 중 ${ok}곡 추가 완료 · 작업 기록에 저장됨`;
+    out.innerHTML = playlistResultHtml(title, url);
+    bindPlaylistResult(out, title, url);
+    hist.add('setlist', {
+      key: pl.id, title, url, at: Date.now(), ok, total: block.songs.length,
+      songs: block.songs.map(({id, name, notes}) => ({id, name, notes}))
+    });
   }catch(e){
     msg.className = 'msg err';
     msg.textContent = e.message;
@@ -527,6 +570,7 @@ function readVideo(){
 }
 
 /* ---------- 설교 구간 자동 찾기 ---------- */
+let detected = null;
 $('#detectBtn').onclick = async () => {
   const btn = $('#detectBtn'), msg = $('#shortsMsg');
   let stop = () => {};
@@ -542,6 +586,7 @@ $('#detectBtn').onclick = async () => {
       generationConfig: {responseMimeType: 'application/json', mediaResolution: 'MEDIA_RESOLUTION_LOW'}
     });
     const j = JSON.parse(text.replace(/^```(?:json)?|```$/g, '').trim());
+    detected = {id, title: (j.title || '').trim()};
     const s = parseTime(j.start), e = parseTime(j.end);
     if(!(s >= 0) || !(e > s)) throw new Error('설교 구간을 찾지 못했어요. 직접 입력해 주세요.');
     $('#tStart').value = fmtTime(s);
@@ -583,10 +628,16 @@ $('#planBtn').onclick = async () => {
       generationConfig: {mediaResolution: 'MEDIA_RESOLUTION_LOW'}
     });
     stop();
-    const last = {id, start: s || 0, text, at: Date.now()};
-    store.set('shortsLast', JSON.stringify(last));
-    renderShorts(last);
-    msg.className = 'msg'; msg.textContent = '완료';
+    const at = Date.now();
+    const sermon = detected && detected.id === id ? detected.title : '';
+    const item = {
+      key: 's' + at, id, start: s || 0, end: e || 0, text, at,
+      title: `${yymmdd(sundayOf(at))} 쇼츠 기획` + (sermon ? ' · ' + sermon : ''),
+      extra: $('#extra').value.trim()
+    };
+    hist.add('shorts', item);
+    renderShorts(item);
+    msg.className = 'msg'; msg.textContent = '완료 · 작업 기록에 저장됨';
   }catch(e){
     stop(); msg.className = 'msg err'; msg.textContent = e.message;
   }finally{ btn.disabled = false; }
@@ -594,59 +645,142 @@ $('#planBtn').onclick = async () => {
 
 /* ================= 결과 표시 ================= */
 const TS_RE = /(?<![\d:])(\d{1,2}:)?(\d{1,2}):(\d{2})(?![\d:])/g;
-
-function inlineMd(t){
-  return t
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/(^|[^*])\*([^*\s][^*]*)\*/g, '$1<em>$2</em>');
-}
-
-function renderMd(src){
-  const lines = src.replace(/\r/g, '').split('\n');
-  let html = '', list = null, para = [], i = 0;
-  const flushP = () => { if(para.length){ html += '<p>' + inlineMd(para.join('<br>')) + '</p>'; para = []; } };
-  const closeL = () => { if(list){ html += `</${list}>`; list = null; } };
-  while(i < lines.length){
-    const raw = lines[i], l = esc(raw);
-    if(/^\s*```/.test(raw)){
-      flushP(); closeL();
-      const buf = []; i++;
-      while(i < lines.length && !/^\s*```/.test(lines[i])) buf.push(esc(lines[i++]));
-      html += '<pre><code>' + buf.join('\n') + '</code></pre>'; i++; continue;
-    }
-    if(/^\s*\|.*\|\s*$/.test(raw) && i + 1 < lines.length && /^\s*\|?\s*:?-{2,}/.test(lines[i+1])){
-      flushP(); closeL();
-      const cells = r => r.trim().replace(/^\||\|$/g, '').split('|').map(c => inlineMd(esc(c.trim())));
-      html += '<div class="tbl"><table><thead><tr>' + cells(raw).map(c => `<th>${c}</th>`).join('') + '</tr></thead><tbody>';
-      i += 2;
-      while(i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])){
-        html += '<tr>' + cells(lines[i]).map(c => `<td>${c}</td>`).join('') + '</tr>'; i++;
-      }
-      html += '</tbody></table></div>'; continue;
-    }
-    let m;
-    if((m = l.match(/^\s*(#{1,6})\s+(.*)$/))){ flushP(); closeL(); const n = Math.min(m[1].length, 4); html += `<h${n}>${inlineMd(m[2])}</h${n}>`; }
-    else if(/^\s*([-*_])\s*\1\s*\1[\s\1]*$/.test(raw)){ flushP(); closeL(); html += '<hr>'; }
-    else if((m = l.match(/^\s*[-*•]\s+(.*)$/))){ flushP(); if(list !== 'ul'){ closeL(); html += '<ul>'; list = 'ul'; } html += `<li>${inlineMd(m[1])}</li>`; }
-    else if((m = l.match(/^\s*\d+[.)]\s+(.*)$/))){ flushP(); if(list !== 'ol'){ closeL(); html += '<ol>'; list = 'ol'; } html += `<li>${inlineMd(m[1])}</li>`; }
-    else if(!raw.trim()){ flushP(); closeL(); }
-    else { closeL(); para.push(l); }
-    i++;
-  }
-  flushP(); closeL();
-  return html;
-}
+const TS_ONE = new RegExp(TS_RE.source);
 
 function toSec(m){ return (m[1] ? parseInt(m[1]) * 3600 : 0) + parseInt(m[2]) * 60 + parseInt(m[3]); }
 
-function linkTimes(html, id, offset){
-  // 태그 밖 텍스트에만 적용
-  return html.replace(/(<[^>]+>)|([^<]+)/g, (all, tag, txt) => tag ? tag :
-    txt.replace(TS_RE, (...m) => {
-      const sec = toSec(m) + offset;
-      return `<a class="ts" href="https://youtu.be/${id}?t=${sec}" target="_blank" rel="noopener">${fmtTime(sec)}</a>`;
-    }));
+function hmsToSec(t){
+  t = String(t || '').trim();
+  if(/^\d+$/.test(t)) return +t;
+  if(/^\d+(:\d+){1,2}$/.test(t)) return parseTime(t);
+  const m = t.match(/^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+(?:\.\d+)?)s)?$/i);
+  if(!m || !(m[1] || m[2] || m[3])) return null;
+  return (+m[1] || 0) * 3600 + (+m[2] || 0) * 60 + Math.floor(+m[3] || 0);
+}
+
+// (#t=0h38m54s) 같은 앵커 표기 제거
+function cleanText(src){
+  return String(src || '')
+    .replace(/\[([^\]]*)\]\(\s*#t=([^)\s]*)\s*\)/gi, (all, label, t) => {
+      if(TS_ONE.test(label)) return label;
+      const sec = hmsToSec(t);
+      return sec != null ? (label.trim() ? label.trim() + ' ' : '') + fmtTime(sec) : label;
+    })
+    .replace(/[ \t]*[(\[]\s*#t=[^)\]\s]*\s*[)\]]/gi, '')
+    .replace(/[ \t]*#t=\d+h?\d*m?\d*(?:\.\d+)?s?\b/gi, '');
+}
+
+/* ---------- 인라인 → 조각(run) ---------- */
+function pushTimes(runs, s, fmt, ctx){
+  let last = 0;
+  for(const m of s.matchAll(TS_RE)){
+    if(m.index > last) runs.push({...fmt, t: s.slice(last, m.index)});
+    const sec = toSec(m) + ctx.offset;
+    runs.push({...fmt, t: fmtTime(sec), href: `https://youtu.be/${ctx.id}?t=${sec}`, ts: 1});
+    last = m.index + m[0].length;
+  }
+  if(last < s.length) runs.push({...fmt, t: s.slice(last)});
+}
+
+function parseInline(text, ctx){
+  const runs = [];
+  const re = /\*\*(.+?)\*\*|`([^`]+)`|\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|(https?:\/\/[^\s<>()]+)|(?<![*\w])\*(?![\s*])([^*]+?)\*(?![\w*])/g;
+  let last = 0, m;
+  while((m = re.exec(text))){
+    if(m.index > last) pushTimes(runs, text.slice(last, m.index), {}, ctx);
+    if(m[1] != null) parseInline(m[1], ctx).forEach(r => runs.push({...r, b: 1}));
+    else if(m[2] != null) runs.push({t: m[2], code: 1});
+    else if(m[3] != null) runs.push({t: m[3], href: m[4]});
+    else if(m[5] != null) runs.push({t: m[5], href: m[5]});
+    else if(m[6] != null) parseInline(m[6], ctx).forEach(r => runs.push({...r, i: 1}));
+    last = re.lastIndex;
+  }
+  if(last < text.length) pushTimes(runs, text.slice(last), {}, ctx);
+  return runs;
+}
+
+function linesToRuns(lines, ctx){
+  const runs = [];
+  lines.forEach((l, i) => { if(i) runs.push({br: 1}); runs.push(...parseInline(l, ctx)); });
+  return runs;
+}
+
+/* ---------- 마크다운 → 블록 ---------- */
+function parseBlocks(src, ctx){
+  const lines = src.replace(/\r/g, '').split('\n');
+  const blocks = [];
+  let i = 0, para = null, list = null;
+  const cells = r => r.trim().replace(/^\||\|$/g, '').split('|').map(c => parseInline(c.trim(), ctx));
+  while(i < lines.length){
+    const raw = lines[i];
+    if(/^\s*```/.test(raw)){
+      para = list = null;
+      const buf = []; i++;
+      while(i < lines.length && !/^\s*```/.test(lines[i])) buf.push(lines[i++]);
+      blocks.push({type: 'code', lines: buf}); i++; continue;
+    }
+    if(/^\s*\|.*\|\s*$/.test(raw) && i + 1 < lines.length && /^\s*\|?\s*:?-{2,}/.test(lines[i+1])){
+      para = list = null;
+      const t = {type: 'table', head: cells(raw), rows: []};
+      i += 2;
+      while(i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) t.rows.push(cells(lines[i++]));
+      blocks.push(t); continue;
+    }
+    let m;
+    const indent = Math.min(2, Math.floor((raw.match(/^\s*/)[0].replace(/\t/g, '  ').length) / 2));
+    if((m = raw.match(/^\s*(#{1,6})\s+(.*)$/))){
+      para = list = null;
+      blocks.push({type: 'h', level: Math.min(m[1].length, 4), runs: parseInline(m[2].replace(/\s*#+\s*$/, ''), ctx)});
+    }else if(/^\s*([-*_])(\s*\1){2,}\s*$/.test(raw)){
+      para = list = null; blocks.push({type: 'hr'});
+    }else if((m = raw.match(/^\s*([-*•+])\s+(.*)$/)) || (m = raw.match(/^\s*(\d+[.)])\s+(.*)$/))){
+      para = null;
+      if(!list){ list = {type: 'list', items: []}; blocks.push(list); }
+      list.items.push({mark: /\d/.test(m[1]) ? m[1].replace(')', '.') : '•', indent, runs: parseInline(m[2], ctx)});
+    }else if(!raw.trim()){
+      para = list = null;
+    }else if(list && indent > 0){
+      // 목록 항목 이어지는 줄
+      const it = list.items[list.items.length - 1];
+      it.runs.push({br: 1}, ...parseInline(raw.trim(), ctx));
+    }else{
+      list = null;
+      if(!para){ para = {type: 'p', lines: []}; blocks.push(para); }
+      para.lines.push(raw.trim());
+    }
+    i++;
+  }
+  blocks.forEach(b => { if(b.type === 'p') b.runs = linesToRuns(b.lines, ctx); });
+  return blocks;
+}
+
+/* ---------- 블록 → HTML ---------- */
+function runsHtml(runs){
+  return runs.map(r => {
+    if(r.br) return '<br>';
+    let h = esc(r.t);
+    if(r.code) h = `<code>${h}</code>`;
+    if(r.i) h = `<em>${h}</em>`;
+    if(r.b) h = `<strong>${h}</strong>`;
+    if(r.href) h = `<a class="${r.ts ? 'ts' : 'lnk'}" href="${esc(r.href)}" target="_blank" rel="noopener">${h}</a>`;
+    return h;
+  }).join('');
+}
+
+function blocksHtml(blocks){
+  return blocks.map(b => {
+    switch(b.type){
+      case 'h': return `<h${b.level}>${runsHtml(b.runs)}</h${b.level}>`;
+      case 'p': return `<p>${runsHtml(b.runs)}</p>`;
+      case 'hr': return '<hr>';
+      case 'code': return `<pre><code>${esc(b.lines.join('\n'))}</code></pre>`;
+      case 'list': return '<div class="list">' + b.items.map(it =>
+        `<div class="li" style="--ind:${it.indent}"><span class="mk">${esc(it.mark)}</span><div>${runsHtml(it.runs)}</div></div>`).join('') + '</div>';
+      case 'table': return '<div class="tbl"><table><thead><tr>' + b.head.map(c => `<th>${runsHtml(c)}</th>`).join('') +
+        '</tr></thead><tbody>' + b.rows.map(r => '<tr>' + r.map(c => `<td>${runsHtml(c)}</td>`).join('') + '</tr>').join('') + '</tbody></table></div>';
+    }
+    return '';
+  }).join('');
 }
 
 function splitSections(src){
@@ -665,7 +799,8 @@ function splitSections(src){
 }
 
 function plain(md){
-  return md.replace(/\*\*([^*]+)\*\*/g, '$1').replace(/^\s*#{1,6}\s+/gm, '').replace(/`([^`]+)`/g, '$1').trim();
+  return cleanText(md).replace(/\*\*([^*]+)\*\*/g, '$1').replace(/^\s*#{1,6}\s+/gm, '').replace(/`([^`]+)`/g, '$1')
+    .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '$1 ($2)').trim();
 }
 
 async function copyText(text, btn){
@@ -677,31 +812,427 @@ async function copyText(text, btn){
   const o = btn.textContent; btn.textContent = '복사됨 ✓'; setTimeout(() => btn.textContent = o, 1500);
 }
 
-function renderShorts(last){
-  const out = $('#shortsOut');
-  if(!last || !last.text){ out.innerHTML = ''; return; }
-  // 모델이 잘라낸 구간 기준 시각으로 답했는지 확인: 모든 시각이 시작보다 작으면 보정
-  const all = [...last.text.matchAll(TS_RE)].map(toSec);
-  const offset = last.start > 0 && all.length && Math.max(...all) < last.start ? last.start : 0;
-  const sections = splitSections(last.text);
-  const when = new Date(last.at).toLocaleString('ko-KR', {month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit'});
-  out.innerHTML =
-    `<div class="row" style="margin:0 0 14px">
-       <button class="ghost" id="copyAll">전체 복사</button>
-       <a class="btn ghost" href="https://youtu.be/${last.id}" target="_blank" rel="noopener">영상 열기</a>
-     </div>
-     <p class="hint" style="color:var(--muted);font-size:.8rem;margin:-6px 0 12px">${when} 생성</p>` +
-    (offset ? `<p class="note">답변의 시각이 설교 구간 기준으로 보여서 원본 영상 시각으로 보정했어요.</p>` : '') +
-    sections.map((sec, i) => `
-      <div class="card">
-        <div class="md">${linkTimes(renderMd(sec), last.id, offset)}</div>
-        <div class="card-tools"><button class="ghost" data-i="${i}">복사</button></div>
-      </div>`).join('');
-  out.querySelector('#copyAll').onclick = e => copyText(plain(last.text), e.currentTarget);
-  out.querySelectorAll('.card-tools button').forEach(b => b.onclick = () => copyText(plain(sections[+b.dataset.i]), b));
+function fmtWhen(ts){
+  return new Date(ts).toLocaleString('ko-KR', {year: '2-digit', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit'});
 }
 
-try{ renderShorts(JSON.parse(store.get('shortsLast') || 'null')); }catch(e){}
+function yymmdd(d){
+  const p = n => String(n).padStart(2, '0');
+  return p(d.getFullYear() % 100) + p(d.getMonth() + 1) + p(d.getDate());
+}
+function sundayOf(ts){ const d = new Date(ts); d.setDate(d.getDate() - d.getDay()); return d; }
+
+// 결과 텍스트 → 섹션별 블록 (화면/PDF 공용)
+function prepareShorts(item){
+  const text = cleanText(item.text);
+  const all = [...text.matchAll(TS_RE)].map(toSec);
+  // 모델이 잘라낸 구간 기준 시각으로 답했으면(모든 시각 < 시작) 원본 시각으로 보정
+  const offset = item.start > 0 && all.length && Math.max(...all) < item.start ? item.start : 0;
+  const ctx = {id: item.id, offset};
+  const sections = splitSections(text).map(md => ({md, blocks: parseBlocks(md, ctx)}));
+  return {text, offset, sections};
+}
+
+function shortsRange(item){
+  if(!item.start && !item.end) return '';
+  return `${item.start ? fmtTime(item.start) : '처음'} ~ ${item.end ? fmtTime(item.end) : '끝'}`;
+}
+
+let currentShorts = null;
+
+function renderShorts(item){
+  const out = $('#shortsOut');
+  currentShorts = item && item.text ? item : null;
+  markActive('shorts');
+  if(!currentShorts){ out.innerHTML = ''; return; }
+  const p = prepareShorts(item);
+  const range = shortsRange(item);
+  out.innerHTML =
+    `<div class="card view-head">
+       <div class="vh-title">${esc(item.title || '쇼츠 기획')}</div>
+       <div class="vh-meta">${fmtWhen(item.at)} 생성${range ? ' · 설교 ' + esc(range) : ''}</div>
+       <div class="row">
+         <button id="pdfShare">PDF 공유</button>
+         <button class="ghost" id="pdfSave">PDF 저장</button>
+       </div>
+       <div class="row">
+         <button class="ghost" id="copyAll">전체 복사</button>
+         <a class="btn ghost" href="https://youtu.be/${item.id}${item.start ? '?t=' + item.start : ''}" target="_blank" rel="noopener">영상 열기</a>
+       </div>
+       <div class="msg" id="pdfMsg"></div>
+     </div>` +
+    (p.offset ? `<p class="note">답변의 시각이 설교 구간 기준으로 보여서 원본 영상 시각으로 보정했어요.</p>` : '') +
+    p.sections.map((s, i) => `
+      <div class="card">
+        <div class="md">${blocksHtml(s.blocks)}</div>
+        <div class="card-tools"><button class="ghost" data-i="${i}">복사</button></div>
+      </div>`).join('');
+  out.querySelector('#copyAll').onclick = e => copyText(plain(item.text), e.currentTarget);
+  out.querySelectorAll('.card-tools button').forEach(b => b.onclick = () => copyText(plain(p.sections[+b.dataset.i].md), b));
+  out.querySelector('#pdfShare').onclick = e => pdfAction(item, e.currentTarget, 'share');
+  out.querySelector('#pdfSave').onclick = e => pdfAction(item, e.currentTarget, 'save');
+  preloadPdf();
+}
+
+/* ================= PDF ================= */
+let pdfAssets = null;
+function loadPdfAssets(){
+  if(!pdfAssets){
+    pdfAssets = (async () => {
+      if(!window.jspdf){
+        await new Promise((res, rej) => {
+          const s = document.createElement('script');
+          s.src = 'vendor/jspdf.umd.min.js';
+          s.onload = res; s.onerror = () => rej(new Error('PDF 라이브러리를 불러오지 못했어요.'));
+          document.head.appendChild(s);
+        });
+      }
+      const fonts = {};
+      for(const w of ['Regular', 'Bold']){
+        const r = await fetch(`fonts/NanumGothic-${w}.ttf`);
+        if(!r.ok) throw new Error('PDF용 글꼴을 불러오지 못했어요.');
+        fonts[w] = abToB64(await r.arrayBuffer());
+      }
+      return fonts;
+    })();
+    pdfAssets.catch(() => { pdfAssets = null; });
+  }
+  return pdfAssets;
+}
+function preloadPdf(){
+  const c = navigator.connection;
+  if(c && c.saveData) return;
+  setTimeout(() => loadPdfAssets().catch(() => {}), 1200);
+}
+function abToB64(buf){
+  const u = new Uint8Array(buf); let s = '';
+  for(let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+
+async function buildPdf(item){
+  const fonts = await loadPdfAssets();
+  const {jsPDF} = window.jspdf;
+  const doc = new jsPDF({unit: 'pt', format: 'a4', compress: true});
+  doc.addFileToVFS('NG-R.ttf', fonts.Regular); doc.addFont('NG-R.ttf', 'NG', 'normal');
+  doc.addFileToVFS('NG-B.ttf', fonts.Bold); doc.addFont('NG-B.ttf', 'NG', 'bold');
+  const title = item.title || '쇼츠 기획';
+  doc.setProperties({title, creator: '예배팀 주간 도구'});
+
+  const PW = doc.internal.pageSize.getWidth(), PH = doc.internal.pageSize.getHeight();
+  const M = 46, W = PW - 2 * M, BOTTOM = PH - 52;
+  const C = {text: [29, 29, 31], muted: [110, 110, 116], link: [196, 40, 34], line: [222, 220, 214], fill: [245, 244, 240]};
+  let y = M;
+
+  const newPage = () => { doc.addPage(); y = M; };
+  const ensure = h => { if(y + h > BOTTOM && y > M) newPage(); };
+  const font = (r, size) => { doc.setFont('NG', r && r.b ? 'bold' : 'normal'); doc.setFontSize(size); };
+
+  // 조각들을 폭에 맞춰 줄로 나누기
+  function layout(runs, width, size, base){
+    const lines = []; let line = [], lw = 0;
+    const flush = () => {
+      while(line.length && !line[line.length - 1].t.trim()){ lw -= line.pop().w; }
+      const l = line[line.length - 1];
+      if(l && /\s$/.test(l.t)){ const t = l.t.replace(/\s+$/, ''); font(l.r, size); l.w = doc.getTextWidth(t); l.t = t; }
+      lines.push(line); line = []; lw = 0;
+    };
+    for(const r0 of runs){
+      if(r0.br){ flush(); continue; }
+      const r = base ? {...base, ...r0} : r0;
+      font(r, size);
+      const add = t => {
+        const w = doc.getTextWidth(t), last = line[line.length - 1];
+        if(last && last.r === r){ last.t += t; last.w += w; } else line.push({r, t, w});
+        lw += w;
+      };
+      for(let tok of String(r.t).split(/(\s+)/)){
+        if(!tok) continue;
+        if(/^\s+$/.test(tok)){ if(line.length) add(' '); continue; }
+        let w = doc.getTextWidth(tok);
+        if(lw + w > width && line.length) flush();
+        if(w > width){
+          let buf = '';
+          for(const ch of tok){
+            if(lw + doc.getTextWidth(buf + ch) > width && (buf || line.length)){
+              if(buf) add(buf);
+              flush(); buf = ch;
+            }else buf += ch;
+          }
+          tok = buf;
+        }
+        if(tok) add(tok);
+      }
+    }
+    if(line.length || !lines.length) flush();
+    return lines;
+  }
+
+  function drawLine(ln, x, ty, size, lh, color){
+    let cx = x;
+    for(const s of ln){
+      font(s.r, size);
+      const col = s.r.href ? C.link : (color || C.text);
+      doc.setTextColor(...col);
+      const top = ty + (lh - size) / 2;
+      doc.text(s.t, cx, top, {baseline: 'top'});
+      if(s.r.href && s.t.trim()){
+        doc.link(cx, ty, s.w, lh, {url: s.r.href});
+        doc.setDrawColor(...C.link); doc.setLineWidth(0.5);
+        doc.line(cx, top + size + 1.2, cx + s.w, top + size + 1.2);
+      }
+      cx += s.w;
+    }
+  }
+
+  function para(runs, x, width, size, lh, opts = {}){
+    const lines = layout(runs, width, size, opts.base);
+    lines.forEach((ln, i) => {
+      ensure(lh);
+      if(i === 0 && opts.marker){
+        font(null, size); doc.setTextColor(...C.muted);
+        doc.text(opts.marker, x - opts.markerW, y + (lh - size) / 2, {baseline: 'top'});
+      }
+      drawLine(ln, x, y, size, lh, opts.color);
+      y += lh;
+    });
+  }
+
+  function table(b){
+    const size = 9.2, lh = 13.5, pad = 5;
+    const ncol = Math.max(b.head.length, ...b.rows.map(r => r.length));
+    const textOf = runs => runs.map(r => r.t || '').join('');
+    const nat = Array(ncol).fill(0);
+    [b.head, ...b.rows].forEach((row, ri) => row.forEach((c, ci) => {
+      font({b: ri === 0}, size);
+      nat[ci] = Math.max(nat[ci], doc.getTextWidth(textOf(c)) + 2 * pad);
+    }));
+    const weights = nat.map(n => Math.min(Math.max(n, 34), W * 0.55));
+    const sum = weights.reduce((a, b) => a + b, 0);
+    const widths = weights.map(w => sum <= W ? w + (W - sum) * (w / sum) : w * W / sum);
+    const rowLayout = (row, bold) => {
+      const cl = widths.map((w, ci) => layout(row[ci] || [], w - 2 * pad, size, bold ? {b: 1} : null));
+      return {cl, h: Math.max(...cl.map(l => l.length)) * lh + 2 * pad};
+    };
+    const head = rowLayout(b.head, true);
+    const drawRow = (rl, isHead) => {
+      let x = M;
+      widths.forEach((w, ci) => {
+        if(isHead){ doc.setFillColor(...C.fill); doc.rect(x, y, w, rl.h, 'F'); }
+        doc.setDrawColor(...C.line); doc.setLineWidth(0.6); doc.rect(x, y, w, rl.h, 'S');
+        rl.cl[ci].forEach((ln, li) => drawLine(ln, x + pad, y + pad + li * lh, size, lh));
+        x += w;
+      });
+      y += rl.h;
+    };
+    ensure(head.h + lh * 2 + 2 * pad);
+    drawRow(head, true);
+    b.rows.forEach(r => {
+      const rl = rowLayout(r, false);
+      if(y + rl.h > BOTTOM){ newPage(); drawRow(head, true); }
+      drawRow(rl, false);
+    });
+    y += 8;
+  }
+
+  function blocks(list){
+    list.forEach((b, bi) => {
+      if(b.type === 'h'){
+        const size = {1: 15, 2: 13.5, 3: 12, 4: 11}[b.level];
+        if(y > M) y += bi ? 8 : 2;
+        ensure(size * 1.5 + 34);
+        para(b.runs, M, W, size, size * 1.45, {base: {b: 1}});
+        y += 3;
+      }else if(b.type === 'p'){
+        para(b.runs, M, W, 10.4, 16); y += 5;
+      }else if(b.type === 'list'){
+        b.items.forEach(it => {
+          const x0 = M + it.indent * 14;
+          font(null, 10.4);
+          const mw = Math.max(11, doc.getTextWidth(it.mark) + 5);
+          para(it.runs, x0 + mw, W - (x0 - M) - mw, 10.4, 16, {marker: it.mark, markerW: mw});
+          y += 1.5;
+        });
+        y += 4;
+      }else if(b.type === 'table'){
+        table(b);
+      }else if(b.type === 'hr'){
+        ensure(12); y += 4; doc.setDrawColor(...C.line); doc.setLineWidth(0.6); doc.line(M, y, M + W, y); y += 8;
+      }else if(b.type === 'code'){
+        const runs = linesToRuns(b.lines, {id: item.id, offset: 0}).map(r => r.br ? r : {t: r.t});
+        const lines = layout(runs, W - 16, 9.2);
+        lines.forEach(ln => {
+          ensure(14);
+          doc.setFillColor(...C.fill); doc.rect(M, y, W, 14, 'F');
+          drawLine(ln, M + 8, y, 9.2, 14);
+          y += 14;
+        });
+        y += 6;
+      }
+    });
+  }
+
+  // 머리말
+  para([{t: title, b: 1}], M, W, 18, 25);
+  y += 2;
+  const range = shortsRange(item);
+  para([{t: `${fmtWhen(item.at)} 생성` + (range ? ` · 설교 구간 ${range}` : '')}], M, W, 9.5, 14, {color: C.muted});
+  const vurl = `https://youtu.be/${item.id}${item.start ? '?t=' + item.start : ''}`;
+  para([{t: '영상: ', }, {t: vurl, href: vurl}], M, W, 9.5, 14, {color: C.muted});
+  y += 6; doc.setDrawColor(...C.text); doc.setLineWidth(1); doc.line(M, y, M + W, y); y += 14;
+
+  const p = prepareShorts(item);
+  p.sections.forEach((s, si) => {
+    if(si){
+      ensure(40);
+      y += 6; doc.setDrawColor(...C.line); doc.setLineWidth(0.8); doc.line(M, y, M + W, y); y += 14;
+    }
+    blocks(s.blocks);
+  });
+
+  // 쪽 번호
+  const n = doc.getNumberOfPages();
+  for(let i = 1; i <= n; i++){
+    doc.setPage(i); font(null, 8); doc.setTextColor(...C.muted);
+    doc.text(`${i} / ${n}`, PW / 2, PH - 28, {align: 'center', baseline: 'top'});
+  }
+  return doc.output('blob');
+}
+
+function pdfName(item){
+  return `쇼츠기획_${yymmdd(sundayOf(item.at))}.pdf`;
+}
+
+const pdfCache = new Map();
+async function pdfAction(item, btn, mode){
+  const msg = $('#pdfMsg');
+  msg.className = 'msg'; msg.textContent = '';
+  let file = pdfCache.get(item.key);
+  try{
+    if(!file){
+      const label = btn.textContent;
+      btn.disabled = true; btn.textContent = 'PDF 만드는 중…';
+      try{
+        const blob = await buildPdf(item);
+        file = new File([blob], pdfName(item), {type: 'application/pdf'});
+        pdfCache.set(item.key, file);
+      }finally{ btn.disabled = false; btn.textContent = label; }
+    }
+    if(mode === 'share' && navigator.canShare && navigator.canShare({files: [file]})){
+      try{
+        await navigator.share({files: [file], title: file.name});
+      }catch(e){
+        if(e.name === 'NotAllowedError'){ msg.textContent = 'PDF가 준비됐어요. "PDF 공유"를 한 번 더 눌러주세요.'; }
+        else if(e.name !== 'AbortError') throw e;
+      }
+      return;
+    }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(file); a.download = file.name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+    if(mode === 'share') msg.textContent = '이 브라우저는 파일 공유를 지원하지 않아서 PDF를 저장했어요.';
+  }catch(e){
+    msg.className = 'msg err'; msg.textContent = 'PDF 만들기 실패: ' + e.message;
+  }
+}
+
+/* ================= 작업 기록 ================= */
+const HIST_CAP = {setlist: 100, shorts: 60};
+const hist = {
+  get(k){ try{ const v = JSON.parse(store.get('hist.' + k) || '[]'); return Array.isArray(v) ? v : []; }catch(e){ return []; } },
+  set(k, arr){ store.set('hist.' + k, JSON.stringify(arr)); },
+  add(k, item){ const a = hist.get(k).filter(x => x.key !== item.key); a.unshift(item); hist.set(k, a.slice(0, HIST_CAP[k])); renderHist(k); },
+  remove(k, key){ hist.set(k, hist.get(k).filter(x => x.key !== key)); renderHist(k); }
+};
+
+function histMeta(k, it){
+  if(k === 'setlist') return `${fmtWhen(it.at)} · ${it.total}곡` + (it.ok < it.total ? ` (${it.ok}곡 추가됨)` : '');
+  const r = shortsRange(it);
+  return fmtWhen(it.at) + (r ? ' · 설교 ' + r : '');
+}
+
+function currentKey(k){
+  return k === 'shorts' ? (currentShorts && currentShorts.key) : (currentSetlist && currentSetlist.key);
+}
+function markActive(k){
+  const box = document.getElementById('hist-' + k);
+  if(!box) return;
+  const cur = currentKey(k);
+  box.querySelectorAll('.hrow').forEach(r => r.classList.toggle('active', r.dataset.key === cur));
+}
+
+function renderHist(k){
+  const box = document.getElementById('hist-' + k);
+  const list = hist.get(k);
+  document.getElementById('histCount-' + k).textContent = list.length;
+  if(!list.length){ box.innerHTML = '<div class="empty">아직 기록이 없어요.</div>'; return; }
+  box.innerHTML = list.map(it => `
+    <div class="hrow" data-key="${esc(it.key)}">
+      <button class="hopen"><span class="ht">${esc(it.title || '(제목 없음)')}</span><span class="hm">${esc(histMeta(k, it))}</span></button>
+      <button class="ghost hdel">삭제</button>
+    </div>`).join('');
+  box.querySelectorAll('.hrow').forEach(row => {
+    const key = row.dataset.key;
+    row.querySelector('.hopen').onclick = () => {
+      const it = hist.get(k).find(x => x.key === key);
+      if(!it) return;
+      if(k === 'shorts'){ renderShorts(it); $('#shortsOut').scrollIntoView({behavior: 'smooth', block: 'start'}); }
+      else { renderSetlistView(it); $('#setlistView').scrollIntoView({behavior: 'smooth', block: 'start'}); }
+    };
+    const del = row.querySelector('.hdel');
+    del.onclick = () => {
+      if(!del.classList.contains('confirm')){
+        del.classList.add('confirm'); del.textContent = '삭제할까요?';
+        clearTimeout(del._t);
+        del._t = setTimeout(() => { del.classList.remove('confirm'); del.textContent = '삭제'; }, 3000);
+        return;
+      }
+      if(currentKey(k) === key){ k === 'shorts' ? renderShorts(null) : renderSetlistView(null); }
+      hist.remove(k, key);
+    };
+  });
+  markActive(k);
+}
+
+/* ---------- 세트리스트 기록 보기 ---------- */
+let currentSetlist = null;
+function renderSetlistView(it){
+  const box = $('#setlistView');
+  currentSetlist = it;
+  markActive('setlist');
+  if(!it){ box.innerHTML = ''; return; }
+  box.innerHTML = `
+    <div class="card">
+      <div class="block-head"><div class="vh-title" style="flex:1">${esc(it.title)}</div>
+        <button class="ghost close" style="padding:6px 12px">닫기</button></div>
+      <div class="vh-meta">${esc(histMeta('setlist', it))}</div>
+      ${playlistResultHtml(it.title, it.url)}
+      <div style="margin-top:12px">
+      ${it.songs.map(s => `
+        <div class="song">
+          <img src="https://i.ytimg.com/vi/${s.id}/mqdefault.jpg" alt="" loading="lazy">
+          <div class="meta">
+            <div class="name"><a class="lnk" href="https://youtu.be/${s.id}" target="_blank" rel="noopener">${esc(s.name || '(제목 없음)')}</a></div>
+            ${s.notes && s.notes.length ? `<div class="notes">${esc(s.notes.join('\n'))}</div>` : ''}
+          </div>
+        </div>`).join('')}
+      </div>
+    </div>`;
+  bindPlaylistResult(box, it.title, it.url);
+  box.querySelector('.close').onclick = () => renderSetlistView(null);
+}
+
+// 기존 저장값 옮기기
+try{
+  const old = JSON.parse(store.get('shortsLast') || 'null');
+  if(old && old.text && !hist.get('shorts').length){
+    hist.set('shorts', [{...old, key: 's' + old.at, title: '쇼츠 기획'}]);
+  }
+}catch(e){}
+renderHist('setlist');
+renderHist('shorts');
+renderShorts(hist.get('shorts')[0] || null);
 </script>
 </body>
 </html>
