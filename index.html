@@ -128,6 +128,10 @@ a.lnk{color:var(--accent);text-decoration:none;word-break:break-all}
       <textarea id="skillText" class="skill" placeholder="---&#10;name: ...&#10;---&#10;..."></textarea>
     </div>
     <div class="row"><button id="saveSettings" class="ghost">저장</button></div>
+    <hr style="border:0;border-top:1px solid var(--line);margin:14px 0">
+    <label>기록 내보내기</label>
+    <p class="hint">새 사이트로 옮길 때 씁니다. 이 브라우저의 작업 기록과 스킬 내용을 파일 하나로 받아요. 기기마다 기록이 따로라서 폰과 PC에서 각각 내보내세요. (API 키는 넣지 않아요)</p>
+    <div class="row"><button id="exportBtn" class="ghost">기록 내보내기</button></div>
   </details>
 
   <section id="tab-setlist">
@@ -1222,6 +1226,23 @@ function renderSetlistView(it){
   bindPlaylistResult(box, it.title, it.url);
   box.querySelector('.close').onclick = () => renderSetlistView(null);
 }
+
+/* ---------- 기록 내보내기 (v2로 옮기기용) ---------- */
+$('#exportBtn').onclick = async () => {
+  const data = {
+    app: 'worship-tools', version: 1, exportedAt: Date.now(),
+    setlist: hist.get('setlist'), shorts: hist.get('shorts'), skillText: store.get('skillText') || ''
+  };
+  const file = new File([JSON.stringify(data)], `worship-tools-기록_${yymmdd(new Date())}.json`, {type: 'application/json'});
+  if(navigator.canShare && navigator.canShare({files: [file]})){
+    try{ await navigator.share({files: [file], title: file.name}); return; }
+    catch(e){ if(e.name === 'AbortError') return; }
+  }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(file); a.download = file.name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+};
 
 // 기존 저장값 옮기기
 try{

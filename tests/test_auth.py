@@ -1,6 +1,4 @@
 """1단계: 로그인, 세션, 역할, Origin 검사."""
-from fastapi import Depends
-
 from app import auth
 from app.db import now_ms
 from conftest import ADMIN, CLIENT_ID, MEMBER, login
@@ -125,18 +123,14 @@ def test_reads_do_not_need_origin(client):
     assert client.get('/api/config').status_code == 200
 
 
-def test_require_admin(app, client, add_member):
-    @app.get('/api/_admin_only')
-    def admin_only(user: dict = Depends(auth.require_admin)):
-        return {'ok': True}
-
+def test_require_admin(client, add_member):
     add_member()
-    assert client.get('/api/_admin_only').status_code == 401
+    assert client.get('/api/members').status_code == 401
     login(client, MEMBER)
-    r = client.get('/api/_admin_only')
+    r = client.get('/api/members')
     assert r.status_code == 403 and r.json()['detail'] == '관리자만 사용할 수 있어요.'
     login(client, ADMIN)
-    assert client.get('/api/_admin_only').status_code == 200
+    assert client.get('/api/members').status_code == 200
 
 
 def test_schema_version(db):
