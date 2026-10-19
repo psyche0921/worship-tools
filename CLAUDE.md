@@ -9,6 +9,8 @@
 
 **지금 진행할 작업은 `docs/handoff.md`에 있습니다. 먼저 읽어주세요.** 현재 구조와 결정 사항, 다음 단계(자체 서버 배포와 DB 이전), 정해지지 않은 질문을 정리해 두었습니다.
 
+**v2 설계는 `docs/v2-design.md`에 확정되어 있습니다.** 배포 대상은 170번 서버(`tstech@192.168.0.170`), 주소는 `https://bbc.ppsoft.kr`입니다. 팀원은 쇼츠 기획만 쓰고, 세트리스트는 관리자만 씁니다.
+
 ## 현재 구조 (v1, 정적 페이지)
 
 - `index.html` 파일 하나에 HTML, CSS, JS가 모두 들어 있고, 빌드 단계는 없습니다. 현재 GitHub Pages(`https://psyche0921.github.io/worship-tools/`)로 배포되어 있습니다.
