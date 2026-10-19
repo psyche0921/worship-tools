@@ -107,3 +107,17 @@ def seed_admins(conn: sqlite3.Connection, emails: list[str]) -> None:
                 "ON CONFLICT(email) DO UPDATE SET role = 'admin'",
                 (email, now_ms()),
             )
+
+
+def get_setting(conn: sqlite3.Connection, key: str) -> str | None:
+    row = conn.execute('SELECT value FROM settings WHERE key = ?', (key,)).fetchone()
+    return row[0] if row else None
+
+
+def set_setting(conn: sqlite3.Connection, key: str, value: str, by: str) -> None:
+    conn.execute(
+        'INSERT INTO settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?) '
+        'ON CONFLICT(key) DO UPDATE SET value = excluded.value, '
+        'updated_at = excluded.updated_at, updated_by = excluded.updated_by',
+        (key, value, now_ms(), by),
+    )

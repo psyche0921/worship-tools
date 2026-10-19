@@ -5,6 +5,9 @@ Google ID 토큰 검증은 가짜로 바꾼다. 토큰 문자열 형식:
   'unverified:<email>' → 검증 통과, email_verified=False
   그 밖               → 검증 실패
 """
+import asyncio
+import time
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -38,9 +41,38 @@ def settings(tmp_path):
     )
 
 
+PLAN_REPLY = """## 쇼츠 1: 은혜의 자리
+- 구간: 0:40:12 ~ 0:41:05 (#t=0h40m12s)
+"""
+
+
+class FakeGemini:
+    """Gemini 대신 쓰는 가짜. replies에 넣은 순서대로 답하고, 예외를 넣으면 그 예외를 낸다.
+    hold=True인 동안은 응답을 미뤄서 '진행 중' 상태를 만들 수 있다."""
+
+    def __init__(self):
+        self.replies: list = []
+        self.calls: list[tuple[str, dict]] = []
+        self.hold = False
+
+    async def __call__(self, model: str, body: dict) -> str:
+        self.calls.append((model, body))
+        while self.hold:
+            await asyncio.sleep(0.01)
+        reply = self.replies.pop(0) if self.replies else PLAN_REPLY
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+
 @pytest.fixture
-def app(settings):
-    return create_app(settings, verify_token=fake_verifier)
+def fake_gemini():
+    return FakeGemini()
+
+
+@pytest.fixture
+def app(settings, fake_gemini):
+    return create_app(settings, verify_token=fake_verifier, gemini_call=fake_gemini)
 
 
 @pytest.fixture
@@ -68,3 +100,13 @@ def add_member(db):
 
 def login(client, email):
     return client.post('/api/auth/google', json={'credential': f'ok:{email}'})
+
+
+def wait_job(client, job_id, timeout=5.0):
+    end = time.time() + timeout
+    while time.time() < end:
+        j = client.get(f'/api/jobs/{job_id}').json()
+        if j['status'] in ('done', 'error'):
+            return j
+        time.sleep(0.02)
+    raise AssertionError(f'job {job_id} did not finish: {j}')

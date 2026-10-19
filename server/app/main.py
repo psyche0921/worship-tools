@@ -10,9 +10,11 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import auth
+from . import auth, gemini
 from .config import Settings
 from .db import connect, init_db, seed_admins
+from .jobs import JobRunner, mark_interrupted
+from .routes import shorts
 
 # 정적 파일 위치: 저장소 루트(web/, vendor/, fonts/). 컨테이너에서는 STATIC_ROOT로 지정한다.
 STATIC_ROOT = Path(os.environ.get('STATIC_ROOT') or Path(__file__).resolve().parents[2])
@@ -21,7 +23,8 @@ SAFE_METHODS = {'GET', 'HEAD', 'OPTIONS'}
 
 
 def create_app(settings: Settings | None = None,
-               verify_token: auth.TokenVerifier = auth.google_verifier) -> FastAPI:
+               verify_token: auth.TokenVerifier = auth.google_verifier,
+               gemini_call: gemini.GeminiCall | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
 
     @asynccontextmanager
@@ -30,13 +33,18 @@ def create_app(settings: Settings | None = None,
         conn = connect(settings.db_path)
         try:
             seed_admins(conn, settings.admin_emails)
+            mark_interrupted(conn)
         finally:
             conn.close()
         yield
+        for task in list(app.state.jobs.tasks):
+            task.cancel()
 
     app = FastAPI(title='worship-tools', lifespan=lifespan, docs_url=None, redoc_url=None)
     app.state.settings = settings
     app.state.verify_token = verify_token
+    app.state.gemini = gemini_call or gemini.make_client(settings.gemini_api_key)
+    app.state.jobs = JobRunner(app)
 
     @app.middleware('http')
     async def check_origin(request: Request, call_next):
@@ -55,6 +63,7 @@ def create_app(settings: Settings | None = None,
         return {'clientId': settings.google_client_id}
 
     app.include_router(auth.router)
+    app.include_router(shorts.router)
 
     for name in ('vendor', 'fonts'):
         if (STATIC_ROOT / name).is_dir():
