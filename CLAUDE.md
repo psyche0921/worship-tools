@@ -11,6 +11,13 @@
 
 **v2 설계는 `docs/v2-design.md`에 확정되어 있습니다.** 배포 대상은 170번 서버(`tstech@192.168.0.170`), 주소는 `https://bbc.ppsoft.kr`입니다. 팀원은 쇼츠 기획만 쓰고, 세트리스트는 관리자만 씁니다.
 
+## v2 구조 (`v2` 브랜치, bbc.ppsoft.kr)
+
+- `server/app/`: FastAPI + SQLite. `auth.py`(Google ID 토큰 → 세션, `require_admin`), `jobs.py`(Gemini 백그라운드 작업), `gemini.py`(프롬프트, v1 문구 그대로), `routes/shorts.py`(팀원도 사용), `routes/admin.py`(관리자 전용).
+- `web/index.html`: v2 화면. v1을 바탕으로 저장소만 API로 바꿈. 파서·`cleanText`·PDF 코드를 고치면 v1 `index.html`과 차이가 생기니 v2 쪽을 기준으로 삼습니다.
+- 권한은 반드시 서버 의존성(`current_user`, `require_admin`)으로 막습니다. 화면에서 숨기는 것만으로는 안 됩니다.
+- 배포: 170번 서버 `~/worship-tools`에서 `deploy/deploy.sh`(git pull → docker compose). 설정 값은 서버의 `deploy/.env`(git 제외). nginx 설정과 certbot은 sudo가 필요해서 사용자가 실행합니다.
+
 ## 현재 구조 (v1, 정적 페이지)
 
 - `index.html` 파일 하나에 HTML, CSS, JS가 모두 들어 있고, 빌드 단계는 없습니다. 현재 GitHub Pages(`https://psyche0921.github.io/worship-tools/`)로 배포되어 있습니다.
@@ -35,11 +42,13 @@ pip install playwright pypdf   # Chromium 필요
 python3 tests/e2e.py           # 정적 서버를 띄우고 Gemini/YouTube/Google 로그인은 가짜 응답으로 대체
 ```
 
-v2 서버(`server/`, FastAPI + SQLite) 테스트:
+v2 테스트(`server/`, `web/`):
 
 ```bash
 python3 -m venv .venv && .venv/Scripts/python -m pip install -r server/requirements-dev.txt
 .venv/Scripts/python -m pytest -q   # Google ID 토큰 검증은 tests/conftest.py의 가짜로 대체
+.venv/Scripts/python -m pip install playwright pypdf && .venv/Scripts/python -m playwright install chromium
+.venv/Scripts/python tests/e2e_v2.py   # 실제 서버를 띄우고 로그인·Gemini·YouTube는 가짜로 대체
 ```
 
 `tests/fixtures/`에는 실제 단톡방 메시지 형식의 샘플과, `#t=` 표기가 섞인 쇼츠 응답 샘플이 있습니다.
