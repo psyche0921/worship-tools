@@ -30,12 +30,20 @@ def shorts_title(at_ms: int, sermon: str) -> str:
     return f'{d:%y%m%d} 쇼츠 기획' + (f' · {sermon}' if sermon else '')
 
 
+INTERRUPTED = '서버가 재시작되어 중단됐어요. 다시 시도해 주세요.'
+
+
 def mark_interrupted(conn) -> None:
     with conn:
         conn.execute(
-            "UPDATE jobs SET status = 'error', error = '서버가 재시작되어 중단됐어요. 다시 시도해 주세요.', "
-            "finished_at = ? WHERE status IN ('queued', 'running')",
-            (now_ms(),),
+            "UPDATE jobs SET status = 'error', error = ?, finished_at = ? "
+            "WHERE status IN ('queued', 'running')",
+            (INTERRUPTED, now_ms()),
+        )
+        conn.execute(
+            "UPDATE shorts SET transcript_status = 'error', transcript_error = ? "
+            "WHERE transcript_status = 'running'",
+            (INTERRUPTED,),
         )
 
 
@@ -45,7 +53,14 @@ class JobRunner:
         self.tasks: set[asyncio.Task] = set()
 
     def start(self, job_id: str) -> None:
-        task = asyncio.create_task(self._run(job_id))
+        self._spawn(self._run(job_id))
+
+    def start_transcript(self, shorts_id: int) -> None:
+        """이미 있는 쇼츠 기록의 설교 대본을 (다시) 받아쓴다."""
+        self._spawn(self._run_transcript(shorts_id))
+
+    def _spawn(self, coro) -> None:
+        task = asyncio.create_task(coro)
         self.tasks.add(task)
         task.add_done_callback(self.tasks.discard)
 
@@ -57,6 +72,7 @@ class JobRunner:
         settings = self.app.state.settings
         call: gemini.GeminiCall = self.app.state.gemini
         conn = connect(settings.db_path)
+        shorts_id = None
         try:
             row = conn.execute('SELECT * FROM jobs WHERE id = ?', (job_id,)).fetchone()
             inp = json.loads(row['input_json'])
@@ -78,17 +94,58 @@ class JobRunner:
             except Exception:
                 log.exception('job %s failed', job_id)
                 self._finish(conn, job_id, error='작업 중 알 수 없는 오류가 났어요. 잠시 후 다시 시도해 주세요.')
+            # 설교 대본은 기획 결과를 먼저 보여 준 뒤에 이어서 받아쓴다(작업은 이미 끝난 상태).
+            if shorts_id:
+                await self._transcribe(conn, shorts_id)
         finally:
             conn.close()
+
+    async def _run_transcript(self, shorts_id: int) -> None:
+        conn = connect(self.app.state.settings.db_path)
+        try:
+            await self._transcribe(conn, shorts_id)
+        finally:
+            conn.close()
+
+    async def _transcribe(self, conn, shorts_id: int) -> None:
+        settings = self.app.state.settings
+        call: gemini.GeminiCall = self.app.state.gemini
+        row = conn.execute('SELECT video_id, start_sec, end_sec FROM shorts WHERE id = ?', (shorts_id,)).fetchone()
+        if not row:
+            return
+        model = get_setting(conn, 'model') or settings.default_model
+        with conn:
+            conn.execute("UPDATE shorts SET transcript_status = 'running', transcript_error = NULL WHERE id = ?",
+                         (shorts_id,))
+        text, error = '', None
+        try:
+            text = await call(model, gemini.transcript_body(row['video_id'], row['start_sec'] or None,
+                                                            row['end_sec'] or None))
+        except asyncio.CancelledError:
+            with conn:
+                conn.execute("UPDATE shorts SET transcript_status = 'error', transcript_error = ? WHERE id = ?",
+                             (INTERRUPTED, shorts_id))
+            raise
+        except gemini.GeminiError as e:
+            error = str(e)
+        except Exception:
+            log.exception('transcript for shorts %s failed', shorts_id)
+            error = '설교 대본을 만들다 알 수 없는 오류가 났어요. 잠시 후 다시 시도해 주세요.'
+        with conn:
+            conn.execute(
+                'UPDATE shorts SET transcript = ?, transcript_status = ?, transcript_error = ? WHERE id = ?',
+                (text if not error else '', 'error' if error else 'done', error, shorts_id),
+            )
 
     @staticmethod
     def _save_shorts(conn, row, inp: dict, text: str, model: str) -> int:
         at = now_ms()
         sermon = (inp.get('sermonTitle') or '').strip()
         with conn:
+            # 대본은 바로 뒤에 이어서 받아쓴다. 화면이 '만드는 중'으로 보이도록 상태를 미리 적는다.
             cur = conn.execute(
                 'INSERT INTO shorts (video_id, start_sec, end_sec, title, sermon_title, extra, text, model, '
-                'created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                "created_by, created_at, transcript_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running')",
                 (inp['videoId'], inp.get('start') or 0, inp.get('end') or 0, shorts_title(at, sermon),
                  sermon, inp.get('extra', ''), text, model, row['created_by'], at),
             )

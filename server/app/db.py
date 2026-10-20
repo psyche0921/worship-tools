@@ -68,6 +68,12 @@ MIGRATIONS = [
     );
     CREATE INDEX jobs_user ON jobs(created_by, created_at DESC);
     """,
+    # 설교 대본. 쇼츠 기획이 끝난 뒤 이어서 받아쓰므로 상태를 따로 둔다('', running, done, error).
+    """
+    ALTER TABLE shorts ADD COLUMN transcript TEXT NOT NULL DEFAULT '';
+    ALTER TABLE shorts ADD COLUMN transcript_status TEXT NOT NULL DEFAULT '';
+    ALTER TABLE shorts ADD COLUMN transcript_error TEXT;
+    """,
 ]
 
 

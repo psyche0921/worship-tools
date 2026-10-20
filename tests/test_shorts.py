@@ -1,5 +1,6 @@
-"""2단계: 쇼츠 작업 실행기, Gemini 프롬프트, 팀 공용 쇼츠 기록."""
+"""2단계: 쇼츠 작업 실행기, Gemini 프롬프트, 설교 대본, 팀 공용 쇼츠 기록."""
 import json
+import time
 from datetime import datetime
 
 import pytest
@@ -163,6 +164,92 @@ def test_restart_marks_running_jobs(settings, app, client, db):
         pass
     row = db.execute("SELECT status, error FROM jobs WHERE id = 'j1'").fetchone()
     assert row['status'] == 'error' and '재시작' in row['error']
+
+
+# ---------- 설교 대본 ----------
+
+SCRIPT = '[1:02:35] 오늘 본문은 출애굽기 14장입니다.\n\n[1:03:10] 두려움 앞에서 이스라엘은 멈춰 섰습니다.'
+
+
+def wait_transcript(client, key, timeout=5.0):
+    end = time.time() + timeout
+    while time.time() < end:
+        item = client.get(f'/api/shorts/{key}').json()
+        if item['transcriptStatus'] != 'running':
+            return item
+        time.sleep(0.02)
+    raise AssertionError(f'대본이 끝나지 않음: {item}')
+
+
+def test_plan_also_writes_transcript(client, skill, fake_gemini):
+    fake_gemini.replies = [PLAN_REPLY, SCRIPT]
+    login(client, ADMIN)
+    job = wait_job(client, plan(client).json()['jobId'])
+    # 기획 결과는 대본을 기다리지 않고 끝난다(가짜 Gemini는 즉시 답해서 이미 끝나 있을 수도 있다)
+    assert job['status'] == 'done' and job['shorts']['transcriptStatus'] in ('running', 'done')
+
+    item = wait_transcript(client, job['shorts']['key'])
+    assert item['transcriptStatus'] == 'done' and item['transcript'] == SCRIPT
+    assert item['transcriptError'] is None
+    assert item['text'] == PLAN_REPLY  # 기획 원문은 그대로
+
+    body = fake_gemini.calls[1][1]
+    video, prompt = body['contents'][0]['parts']
+    assert video['video_metadata'] == {'start_offset': '3750s', 'end_offset': '6310s'}
+    assert 'system_instruction' not in body  # 대본은 SKILL.md와 상관없다
+    assert '그대로 받아써서' in prompt['text']
+    assert '잘라낸 영상의 0:00은 원본의 1:02:30입니다.' in prompt['text']
+
+
+def test_transcript_error_keeps_plan(client, skill, fake_gemini):
+    fake_gemini.replies = [PLAN_REPLY, gemini.GeminiError('요청 한도를 넘었어요.')]
+    login(client, ADMIN)
+    job = wait_job(client, plan(client).json()['jobId'])
+    assert job['status'] == 'done'
+    item = wait_transcript(client, job['shorts']['key'])
+    assert item['transcriptStatus'] == 'error' and item['transcriptError'] == '요청 한도를 넘었어요.'
+    assert item['text'] == PLAN_REPLY
+
+
+def test_make_transcript_again(client, skill, fake_gemini, add_member):
+    fake_gemini.replies = [PLAN_REPLY, gemini.GeminiError('x')]
+    login(client, ADMIN)
+    key = wait_job(client, plan(client).json()['jobId'])['shorts']['key']
+    wait_transcript(client, key)
+
+    add_member()
+    login(client, MEMBER)  # 팀원도 다시 만들 수 있다
+    fake_gemini.replies = [SCRIPT]
+    assert client.post(f'/api/shorts/{key}/transcript').json() == {'transcriptStatus': 'running'}
+    assert wait_transcript(client, key)['transcript'] == SCRIPT
+
+
+def test_make_transcript_requires_record_and_login(client):
+    assert client.post('/api/shorts/9999/transcript').status_code == 401
+    login(client, ADMIN)
+    assert client.post('/api/shorts/9999/transcript').status_code == 404
+
+
+def test_transcript_not_run_twice(client, skill, fake_gemini, db):
+    login(client, ADMIN)
+    with db:
+        db.execute("INSERT INTO shorts (video_id, text, created_by, created_at, transcript_status) "
+                   "VALUES (?, 't', ?, ?, 'running')", (VID, ADMIN, now_ms()))
+        shorts_id = db.execute('SELECT MAX(id) FROM shorts').fetchone()[0]
+    r = client.post(f'/api/shorts/{shorts_id}/transcript')
+    assert r.status_code == 409 and '이미' in r.json()['detail']
+
+
+def test_restart_marks_running_transcript(settings, app, client, db):
+    from fastapi.testclient import TestClient
+
+    with db:
+        db.execute("INSERT INTO shorts (video_id, text, created_by, created_at, transcript_status) "
+                   "VALUES (?, 't', ?, ?, 'running')", (VID, ADMIN, now_ms()))
+    with TestClient(app, base_url=settings.public_origin):
+        pass
+    row = db.execute('SELECT transcript_status, transcript_error FROM shorts').fetchone()
+    assert row['transcript_status'] == 'error' and '재시작' in row['transcript_error']
 
 
 # ---------- 작업: 설교 구간 찾기 ----------

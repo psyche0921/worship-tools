@@ -90,6 +90,7 @@ YouTube Data API는 지금처럼 관리자 브라우저에서 직접 호출합�
 - 서버가 재시작되면 `running` 상태였던 작업은 `error`("서버가 재시작되어 중단됨")로 바꿉니다.
 - **사용량 제한**: 키가 서버에 하나뿐이라 사용자별로 하루 `plan` 작업 수를 제한합니다(기본 20회, 환경변수로 조정). 같은 사용자의 동시 작업은 1개까지만 허용합니다.
 - 프롬프트 구성(설교 구간 안내, 절대 시각 지시, 추가 요청)은 v1 문구를 서버로 옮깁니다. SKILL.md는 DB 설정에서 읽고 frontmatter를 제거합니다.
+- **설교 대본**: 기획이 끝나 작업을 `done`으로 바꾼 뒤, 같은 백그라운드 작업에서 같은 구간을 한 번 더 호출해 받아쓰고 `shorts.transcript`에 넣습니다. 기획 결과를 먼저 보여 주기 위해서입니다. 진행 상태는 `transcript_status`(''/running/done/error)에 두고, 서버가 재시작되면 `running`은 `error`로 바꿉니다. 한 번 기획에 Gemini를 두 번 부르는 셈입니다.
 - 서버는 Gemini 응답 원문을 그대로 저장합니다. `#t=` 제거, 타임스탬프 링크, 시작 시각 보정은 v1처럼 화면에 그릴 때 처리합니다(같은 원문을 나중에 다시 그릴 수 있도록).
 
 ## 6. DB 스키마 (SQLite, WAL 모드)
@@ -103,7 +104,8 @@ settings (key TEXT PK, value TEXT, updated_at INT, updated_by TEXT)
           -- 'skill_md', 'model'
 shorts   (id INTEGER PK, video_id TEXT, start_sec INT, end_sec INT,
           title TEXT, sermon_title TEXT, extra TEXT, text TEXT, model TEXT,
-          created_by TEXT, created_at INT, legacy_key TEXT UNIQUE)
+          created_by TEXT, created_at INT, legacy_key TEXT UNIQUE,
+          transcript TEXT, transcript_status TEXT, transcript_error TEXT)
 setlists (id INTEGER PK, playlist_id TEXT UNIQUE, title TEXT, url TEXT,
           ok INT, total INT, songs_json TEXT, raw_message TEXT,
           created_by TEXT, created_at INT)
@@ -132,8 +134,9 @@ jobs     (id TEXT PK, kind TEXT, status TEXT, input_json TEXT, result_json TEXT,
 | `GET /api/jobs/{id}` | 본인 작업 | 상태와 결과 |
 | `GET /api/shorts?before=` | 로그인 | 목록(최신순, 20개씩). 원문 없이 메타만 |
 | `GET /api/shorts/{id}` | 로그인 | 원문 포함 |
+| `POST /api/shorts/{id}/transcript` | 로그인 | 설교 대본 다시 받아쓰기(기획할 때 자동으로 한 번 만든다). 이미 만들고 있으면 409 |
 | `DELETE /api/shorts/{id}` | 만든 사람 · 관리자 | 삭제 |
-| `GET /api/records?kind=&q=&page=&weekly=&size=` | 로그인 | 작업 기록 목록. 세트리스트와 쇼츠를 함께, 10개씩. `q`는 날짜(261115, 2026-11-15)와 키워드(곡 제목, 설교 주제, 쇼츠 본문)를 모두 찾고 조각은 AND. `weekly=true`면 주일별로 묶고 페이지도 주 단위 |
+| `GET /api/records?kind=&q=&page=&size=` | 로그인 | 작업 기록 목록. 언제나 주일별로 묶어서 10주씩. `q`는 날짜(261115, 2026-11-15)와 키워드(곡 제목, 설교 주제, 쇼츠 본문, 설교 대본)를 모두 찾고 조각은 AND. **맞은 기록이 있는 주를 통째로** 돌려줘서, 찬양 제목으로 찾으면 그 주의 쇼츠 기획도 함께 나온다 |
 | `GET /api/records/setlist/{재생목록 ID}` | 로그인 | 세트리스트 상세(원본 메시지는 관리자에게만). 쇼츠 상세는 `/api/shorts/{id}` |
 | `GET /api/setlists`, `GET /api/setlists/{재생목록 ID}` | 관리자 | 목록 / 상세(원본 메시지 포함) |
 | `POST /api/setlists` | 관리자 | 재생목록을 만든 뒤 결과 저장(원본 메시지 포함) |
@@ -145,7 +148,8 @@ jobs     (id TEXT PK, kind TEXT, status TEXT, input_json TEXT, result_json TEXT,
 
 - **처음 화면**: 로그인 전에는 로그인 카드만 보입니다. 등록되지 않은 계정이면 "관리자에게 이메일 등록을 요청하세요"라고 안내합니다.
 - **탭**: 관리자에게는 `세트리스트 | 쇼츠 기획 | 작업 기록 | 설정`을, 팀원에게는 `쇼츠 기획 | 작업 기록`을 보여 줍니다.
-- **작업 기록 탭**: 세트리스트와 쇼츠 기획 기록을 한 목록에서 종류를 구분해 보여 주고(10개씩, 페이지 넘기기), 날짜·키워드로 검색하고, '주일 예배 기준' 체크로 같은 주의 기록을 묶어 그 주에 부른 찬양과 설교 주제를 함께 봅니다. 줄을 누르면 상세(세트리스트는 곡 목록과 재생목록 링크, 쇼츠는 본문과 PDF)가 열리고, 권한이 있으면 거기서 지웁니다.
+- **작업 기록 탭**: 세트리스트와 쇼츠 기획 기록을 언제나 주일 예배 기준으로 묶어서 보여 줍니다(10주씩, 페이지 넘기기). 종류(전체/세트리스트/쇼츠)를 거르고, 날짜·키워드로 찾습니다. 찬양 제목으로 찾으면 그 주의 쇼츠 기획도 함께 나와서, 그 주에 무엇을 부르고 무엇을 설교했는지 같이 봅니다. 줄을 누르면 상세(세트리스트는 곡 목록과 재생목록 링크, 쇼츠는 본문·설교 대본·PDF)가 열리고, 권한이 있으면 거기서 지웁니다.
+- **설교 대본**: 쇼츠 기획 화면과 작업 기록 상세에서 '설교 대본 보기'로 펼칩니다. 아직 만드는 중이면 그렇게 알려 주고 5초마다 다시 확인하며, 없거나 실패했으면 '설교 대본 만들기'로 다시 받아씁니다. 대본의 `[h:mm:ss]`도 영상 링크가 됩니다(PDF에는 넣지 않습니다).
 - **설정**: OAuth 클라이언트 ID와 Gemini 키 입력칸은 없앱니다(서버 설정으로 옮김). 관리자 설정 탭에서는 SKILL.md 편집, 모델명, 팀원 이메일 추가·삭제를 할 수 있습니다.
 - **쇼츠 기록**: 각 항목에 만든 사람 이름을 붙이고, 삭제 버튼은 권한이 있을 때만 보여 줍니다(작업 기록 탭의 상세에서).
 - **세트리스트**: 파싱, 미리보기, 재생목록 생성은 그대로입니다. 생성이 끝나면 `POST /api/setlists`로 저장합니다.

@@ -35,6 +35,8 @@ SHORTS = (FIX / 'shorts-response.md').read_text(encoding='utf-8')
 VIDEO = 're4fR9uW0Po'
 ADMIN, MEMBER, STRANGER = 'admin@example.com', 'member@example.com', 'stranger@example.com'
 SKILL = '---\nname: t\n---\n쇼츠 지침'
+SCRIPT = ('[0:38:54] 오늘 본문은 출애굽기 14장입니다.\n\n'
+          '[0:40:12] 두려움 앞에서 이스라엘 백성은 멈춰 섰습니다.')
 
 # 사이트 로그인(google.accounts.id)과 YouTube 토큰(google.accounts.oauth2)을 흉내 낸다.
 # 로그인 버튼을 누르면 window.__cred 를 ID 토큰으로 넘긴다.
@@ -65,6 +67,9 @@ class FakeGemini:
         if body['generationConfig'].get('responseMimeType'):
             return json.dumps({'start': '0:38:54', 'end': '1:20:00', 'title': '두려움을 이기는 믿음'}, ensure_ascii=False)
         assert body['contents'][0]['parts'][0]['video_metadata'] == {'start_offset': '2334s', 'end_offset': '4800s'}
+        if '그대로 받아써서' in body['contents'][0]['parts'][1]['text']:   # 설교 대본
+            assert 'system_instruction' not in body
+            return SCRIPT
         assert body['system_instruction']['parts'][0]['text'] == '쇼츠 지침'
         return SHORTS
 
@@ -198,6 +203,12 @@ def main():
         uris = [a.get_object()['/A']['/URI'] for page in reader.pages for a in page.get('/Annots', [])]
         assert f'https://youtu.be/{VIDEO}?t=2412' in uris, uris[:5]
 
+        # 설교 대본: 기획이 끝난 뒤 서버가 이어서 받아쓰고, '설교 대본 보기'로 펼친다
+        pg.click('#shortsOut .scriptBtn')
+        pg.wait_for_selector('#shortsOut .md.script', timeout=20000)
+        assert '출애굽기 14장' in pg.inner_text('#shortsOut .md.script')
+        assert '#t=' not in pg.inner_html('#shortsOut .md.script')
+
         # 새로고침 → 로그인 유지, 최신 쇼츠 표시
         pg.reload()
         pg.wait_for_selector('#app:not([hidden])')
@@ -220,58 +231,66 @@ def main():
         assert seeded == [200] * 11, seeded
 
         pg.click('.tabs button[data-tab=records]')
-        pg.wait_for_selector('#recList .hrow')
-        assert pg.inner_text('#recCount') == '세트리스트 13 · 쇼츠 기획 1'
+        pg.wait_for_selector('#recList .wk')
+        assert '세트리스트 13 · 쇼츠 기획 1' in pg.inner_text('#recCount')
 
-        # 10개씩 + 페이지 넘기기
-        assert pg.locator('#recList .hrow').count() == 10 and pg.inner_text('#recPage') == '1 / 2'
+        # 주일 10개씩 + 페이지 넘기기 (언제나 주일 기준으로 묶는다)
+        assert pg.locator('#recList .wk').count() == 10 and pg.inner_text('#recPage') == '1 / 2'
         pg.click('#recNext')
         pg.wait_for_function("document.querySelector('#recPage').textContent === '2 / 2'")
-        assert pg.locator('#recList .hrow').count() == 4
+        assert pg.locator('#recList .wk').count() >= 1
         pg.click('#recPrev')
         pg.wait_for_function("document.querySelector('#recPage').textContent === '1 / 2'")
 
-        # 종류 구분
-        assert set(pg.locator('#recList .kind').all_inner_texts()) <= {'세트리스트', '쇼츠 기획'}
+        # 같은 주의 세트리스트와 쇼츠 기획이 한 묶음
+        week = pg.locator(f'#recList .wk', has=pg.locator('.kind.k-shorts')).first
+        assert week.locator('.kind').all_inner_texts() == ['세트리스트', '쇼츠 기획']
+        assert f'{sunday.year}년 {sunday.month}월 {sunday.day}일 주일' in week.locator('.wk-h').inner_text()
+
+        # 종류 거르기
         pg.select_option('#recKind', 'shorts')
         pg.wait_for_function("document.querySelectorAll('#recList .hrow').length === 1")
         assert set(pg.locator('#recList .kind').all_inner_texts()) == {'쇼츠 기획'}
         pg.select_option('#recKind', 'all')
-        pg.wait_for_function("document.querySelectorAll('#recList .hrow').length === 10")
+        pg.wait_for_function("document.querySelectorAll('#recList .wk').length === 10")
 
         # 날짜로 검색 → 세트리스트 상세
         pg.fill('#recQ', '261118')
         pg.click('#recSearch')
-        pg.wait_for_function("document.querySelectorAll('#recList .hrow').length === 1")
-        assert pg.locator('#recList .hrow').first.get_attribute('data-key') == 'PLtestplaylist1'
+        pg.wait_for_selector('#recList .hrow[data-key=PLtestplaylist1]')
+        assert pg.locator('#recList .hrow').count() == 1
         pg.click('#recList .hopen')
         pg.wait_for_selector('#recordView .song')
         assert pg.input_value('#recordView .link').endswith('PLtestplaylist1')
         assert pg.locator('#recordView .song').count() == 3
 
+        # 찬양 제목으로 검색 → 그 주의 쇼츠 기획도 함께 (한 묶음)
+        pg.fill('#recQ', '씨앗 찬양')
+        pg.click('#recSearch')
+        pg.wait_for_function("document.querySelectorAll('#recList .wk').length === 10")
+        hit = pg.locator('#recList .wk', has=pg.locator('.kind.k-shorts')).first
+        assert hit.locator('.kind').all_inner_texts() == ['세트리스트', '쇼츠 기획']
+
         # 주제 키워드로 검색 → 쇼츠 기획 상세 (본문까지 찾는다)
         pg.fill('#recQ', '두려움')
         pg.click('#recSearch')
-        pg.wait_for_function("document.querySelectorAll('#recList .hrow').length === 1")
-        assert set(pg.locator('#recList .kind').all_inner_texts()) == {'쇼츠 기획'}
-        pg.locator('#recList .hopen').first.click()
+        pg.wait_for_function("document.querySelectorAll('#recList .wk').length === 1")
+        assert set(pg.locator('#recList .kind').all_inner_texts()) == {'세트리스트', '쇼츠 기획'}
+        pg.locator('#recList .hrow[data-kind=shorts] .hopen').click()
         pg.wait_for_selector('#recordView .md')
         assert '#t=' not in pg.inner_html('#recordView')
         assert pg.locator('#recordView a.ts').first.get_attribute('href') == f'https://youtu.be/{VIDEO}?t=2334'
         assert '두려움을 이기는 믿음' in pg.inner_text('#recordView .vh-title')
+
+        # 작업 기록에서도 설교 대본을 본다
+        pg.click('#recordView .scriptBtn')
+        pg.wait_for_selector('#recordView .md.script')
+        assert '출애굽기 14장' in pg.inner_text('#recordView .md.script')
+        assert pg.locator('#recordView .md.script a.ts').first.get_attribute('href') == f'https://youtu.be/{VIDEO}?t=2334'
+        pg.click('#recordView .scriptBtn')
+        pg.wait_for_function("!document.querySelector('#recordView .md.script')")
         pg.click('#recordView .close')
         pg.wait_for_function("!document.querySelector('#recordView .md')")
-
-        # 주일 예배 기준: 같은 주의 세트리스트와 쇼츠 기획이 한 묶음
-        pg.fill('#recQ', f'{sunday:%y%m%d}')
-        pg.click('#recSearch')
-        pg.check('#recWeekly')
-        pg.wait_for_selector('#recList .wk')
-        assert pg.locator('#recList .wk').count() == 1
-        assert pg.locator('#recList .wk .kind').all_inner_texts() == ['세트리스트', '쇼츠 기획']
-        assert f'{sunday.year}년 {sunday.month}월 {sunday.day}일 주일' in pg.locator('#recList .wk-h').first.inner_text()
-        pg.uncheck('#recWeekly')
-        pg.wait_for_function("!document.querySelector('#recList .wk')")
 
         # 상세에서 2단계 삭제
         pg.fill('#recQ', '261011')
@@ -298,7 +317,7 @@ def main():
         # 팀원도 작업 기록을 본다. 세트리스트 기록도 열 수 있지만(그 주 찬양 확인) 지우지는 못한다.
         pg.click('.tabs button[data-tab=records]')
         pg.wait_for_selector('#recList .hrow')
-        assert pg.inner_text('#recCount') == '세트리스트 12 · 쇼츠 기획 1'
+        assert '세트리스트 12 · 쇼츠 기획 1' in pg.inner_text('#recCount')
         pg.fill('#recQ', '261118')
         pg.click('#recSearch')
         pg.wait_for_selector('#recList .hrow[data-key=PLtestplaylist1]')
@@ -322,7 +341,7 @@ def main():
 
         # 쇼츠 기록 삭제는 본인이 만든 것만
         pg.click('.tabs button[data-tab=records]')
-        pg.wait_for_function("document.querySelector('#recCount').textContent === '세트리스트 12 · 쇼츠 기획 2'")
+        pg.wait_for_function("document.querySelector('#recCount').textContent.includes('세트리스트 12 · 쇼츠 기획 2')")
         pg.select_option('#recKind', 'shorts')
         pg.wait_for_function("document.querySelectorAll('#recList .hrow').length === 2")
         assert '홍길동' in pg.locator('#recList .hrow').first.inner_text()

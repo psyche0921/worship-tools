@@ -125,6 +125,25 @@ def parse_detect(text: str) -> dict:
     return {'start': start, 'end': end, 'title': str(j.get('title') or '').strip()}
 
 
+def transcript_body(video_id: str, start: int | None, end: int | None) -> dict:
+    """설교 대본 받아쓰기. 문단마다 원본 기준 시각을 붙여서 화면에서 영상으로 건너뛸 수 있게 한다."""
+    lines = [
+        '첨부 영상은 주일 예배 설교입니다.' if start is None and end is None
+        else '첨부 영상은 주일 예배 라이브 영상에서 설교 구간만 잘라낸 것입니다.',
+        '설교자가 말한 내용을 그대로 받아써서 설교 대본을 만들어 주세요.',
+        '- 요약하거나 다른 말로 바꾸지 말고 들리는 대로 적습니다. "어", "그" 같은 군말과 더듬는 부분만 뺍니다.',
+        '- 두세 문장쯤을 한 문단으로 묶고, 문단마다 맨 앞에 그 문단이 시작하는 시각을 [h:mm:ss] 형식으로 붙입니다.',
+        '- 시각은 원본 라이브 영상 기준 절대 시각입니다.'
+        + (f' 잘라낸 영상의 0:00은 원본의 {fmt_time(start)}입니다.' if start else ''),
+        '- 성경 봉독처럼 읽어 주는 부분도 그대로 적습니다. 회중의 반응이나 찬양 가사는 적지 않습니다.',
+        '- 대본만 적고 제목, 요약, 설명은 쓰지 마세요.',
+    ]
+    return {
+        'contents': [{'role': 'user', 'parts': [video_part(video_id, start, end), {'text': '\n'.join(lines)}]}],
+        'generationConfig': {'mediaResolution': 'MEDIA_RESOLUTION_LOW'},
+    }
+
+
 def plan_body(skill: str, video_id: str, start: int | None, end: int | None, extra: str) -> dict:
     if start is not None or end is not None:
         a = fmt_time(start) if start is not None else '처음'

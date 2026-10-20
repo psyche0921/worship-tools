@@ -105,9 +105,9 @@ button.confirm{background:var(--err)!important;color:#fff!important;border-color
 .mrow .mm{font-size:.78rem;color:var(--muted)}
 .mrow button{flex:none;padding:6px 12px;font-size:.82rem}
 .warn{color:var(--warn);font-size:.85rem;margin:0 0 8px}
-.chk{display:flex;align-items:center;gap:8px;margin:12px 0 0;color:var(--text);font-size:.9rem;cursor:pointer}
-.chk input{width:18px;height:18px;flex:none;accent-color:var(--accent)}
-.chk-hint{font-size:.8rem;color:var(--muted);margin:6px 0 0 26px}
+.rec-hint{font-size:.8rem;color:var(--muted);margin:10px 0 0}
+.md.script{font-size:.88rem;color:var(--text)}
+.md.script p{margin:.45em 0}
 .filters{display:flex;gap:8px;margin-top:10px}
 .filters select{flex:1}
 .rec-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px}
@@ -193,8 +193,7 @@ button.confirm{background:var(--err)!important;color:#fff!important;border-color
           <option value="shorts">쇼츠 기획</option>
         </select>
       </div>
-      <label class="chk"><input type="checkbox" id="recWeekly"> 주일 예배 기준으로 묶어 보기</label>
-      <p class="chk-hint">같은 주의 세트리스트와 쇼츠 기획을 함께 묶어, 그 주에 부른 찬양과 설교 주제를 한눈에 봅니다.</p>
+      <p class="rec-hint">주일 예배 기준으로 묶어서 보여 줘요. 찬양 제목으로 찾으면 그 주에 기획한 쇼츠도 함께 나와요.</p>
     </div>
 
     <div class="card">
@@ -936,11 +935,15 @@ function shortsViewInto(box, item, opts = {}){
        </div>
        <div class="row">
          <button class="ghost copyAll">전체 복사</button>
-         <a class="btn ghost" href="https://youtu.be/${item.id}${item.start ? '?t=' + item.start : ''}" target="_blank" rel="noopener">영상 열기</a>
+         <button class="ghost scriptBtn">설교 대본 보기</button>
        </div>
-       ${opts.del ? '<div class="row"><button class="ghost del" data-label="기록 삭제">기록 삭제</button></div>' : ''}
+       <div class="row">
+         <a class="btn ghost" href="https://youtu.be/${item.id}${item.start ? '?t=' + item.start : ''}" target="_blank" rel="noopener">영상 열기</a>
+         ${opts.del ? '<button class="ghost del" data-label="기록 삭제">기록 삭제</button>' : ''}
+       </div>
        <div class="msg pdfMsg"></div>
-     </div>` +
+     </div>
+     <div class="scriptBox"></div>` +
     (p.offset ? `<p class="note">답변의 시각이 설교 구간 기준으로 보여서 원본 영상 시각으로 보정했어요.</p>` : '') +
     p.sections.map((s, i) => `
       <div class="card">
@@ -951,9 +954,66 @@ function shortsViewInto(box, item, opts = {}){
   box.querySelectorAll('.card-tools button').forEach(b => b.onclick = () => copyText(plain(p.sections[+b.dataset.i].md), b));
   box.querySelector('.pdfShare').onclick = e => pdfAction(item, e.currentTarget, 'share');
   box.querySelector('.pdfSave').onclick = e => pdfAction(item, e.currentTarget, 'save');
+  bindScript(box, item);
   if(opts.close) box.querySelector('.close').onclick = opts.close;
   bindDelete(box, opts.del);
   preloadPdf();
+}
+
+/* ---------- 설교 대본 ----------
+   기획할 때 서버가 이어서 받아쓴다. 아직 없거나 실패했으면 여기서 다시 만든다. */
+function scriptHtml(item){
+  const st = item.transcriptStatus || '';
+  if(item.transcript){
+    const text = cleanText(item.transcript);
+    const all = [...text.matchAll(TS_RE)].map(toSec);
+    const offset = item.start > 0 && all.length && Math.max(...all) < item.start ? item.start : 0;
+    return `<div class="card">
+        <div class="block-head"><div class="vh-title" style="flex:1">설교 대본</div>
+          <button class="ghost scriptCopy" style="padding:6px 12px;flex:none">복사</button></div>
+        <div class="md script">${blocksHtml(parseBlocks(text, {id: item.id, offset}))}</div>
+      </div>`;
+  }
+  if(st === 'running'){
+    return '<div class="card empty">설교 대본을 만드는 중이에요. 1~2분쯤 걸려요.</div>';
+  }
+  return `<div class="card">
+      <div class="empty">${esc(item.transcriptError || '아직 설교 대본이 없어요.')}</div>
+      <div class="row"><button class="ghost scriptMake">설교 대본 만들기</button></div>
+    </div>`;
+}
+
+function bindScript(box, item){
+  const btn = box.querySelector('.scriptBtn'), wrap = box.querySelector('.scriptBox');
+  let open = false, timer = 0;
+
+  const draw = () => {
+    wrap.innerHTML = open ? scriptHtml(item) : '';
+    btn.textContent = open ? '설교 대본 닫기' : '설교 대본 보기';
+    if(!open){ clearTimeout(timer); return; }
+    const copy = wrap.querySelector('.scriptCopy');
+    if(copy) copy.onclick = e => copyText(plain(item.transcript), e.currentTarget);
+    const make = wrap.querySelector('.scriptMake');
+    if(make) make.onclick = async () => {
+      make.disabled = true;
+      try{
+        await api(`/api/shorts/${encodeURIComponent(item.key)}/transcript`, {method: 'POST'});
+        item.transcriptStatus = 'running'; item.transcriptError = null;
+        draw();
+      }catch(e){ make.disabled = false; item.transcriptError = e.message; draw(); }
+    };
+    if(item.transcriptStatus === 'running') timer = setTimeout(poll, 5000);
+  };
+
+  const poll = async () => {
+    try{
+      const full = await api('/api/shorts/' + encodeURIComponent(item.key));
+      Object.assign(item, full);
+    }catch(e){ if(!e.network){ item.transcriptStatus = 'error'; item.transcriptError = e.message; } }
+    if(open) draw();
+  };
+
+  btn.onclick = () => { open = !open; draw(); if(open && !item.transcript) poll(); };
 }
 
 function renderShorts(item){
@@ -1227,18 +1287,18 @@ async function pdfAction(item, btn, mode){
 }
 
 /* ================= 작업 기록 =================
-   세트리스트와 쇼츠 기획 기록을 한곳에서 본다(팀원도 사용). 목록은 서버가 걸러서
-   10개씩 돌려주고, '주일 예배 기준'을 켜면 같은 주의 기록을 묶어서 주 단위로 센다. */
+   세트리스트와 쇼츠 기획 기록을 한곳에서 본다(팀원도 사용). 언제나 주일 예배 기준으로
+   묶고 10주씩 보여 준다. 검색은 맞은 기록이 있는 주를 통째로 돌려주므로, 찬양 제목으로
+   찾으면 그 주에 기획한 쇼츠도 함께 나온다. */
 const PAGE_SIZE = 10;
 const KIND_LABEL = {setlist: '세트리스트', shorts: '쇼츠 기획'};
 
 const records = {
-  q: '', kind: 'all', weekly: false, page: 1, pages: 1, loaded: false, open: null,
+  q: '', kind: 'all', page: 1, pages: 1, loaded: false, open: null,
   async load(page){
     const box = $('#recList');
     const p = new URLSearchParams({kind: records.kind, page: Math.max(1, page || 1), size: PAGE_SIZE});
     if(records.q) p.set('q', records.q);
-    if(records.weekly) p.set('weekly', 'true');
     box.innerHTML = '<div class="empty">불러오는 중…</div>';
     try{
       renderRecords(await api('/api/records?' + p));
@@ -1263,7 +1323,7 @@ function recordMeta(it){
   }
   const r = shortsRange(it);
   return `${it.dateLabel} 예배` + (it.topic ? ' · ' + it.topic : '') + (r ? ' · 설교 ' + r : '')
-    + (it.byName ? ' · ' + it.byName : '');
+    + (it.hasTranscript ? ' · 대본 있음' : '') + (it.byName ? ' · ' + it.byName : '');
 }
 
 function recordRow(it){
@@ -1279,17 +1339,15 @@ function renderRecords(d){
   const box = $('#recList');
   records.page = d.page; records.pages = d.pages;
   $('#recCount').textContent = d.total
-    ? `세트리스트 ${d.counts.setlist} · 쇼츠 기획 ${d.counts.shorts}` : '';
+    ? `${d.weeks}주 · 세트리스트 ${d.counts.setlist} · 쇼츠 기획 ${d.counts.shorts}` : '';
   if(!d.total){
     box.innerHTML = `<div class="empty">${records.q ? '검색 결과가 없어요.' : '아직 기록이 없어요.'}</div>`;
-  }else if(d.weekly){
+  }else{
     box.innerHTML = d.groups.map(g => `
       <div class="wk">
         <div class="wk-h"><span>${esc(g.label)}</span><span class="count">${g.items.length}건</span></div>
         ${g.items.map(recordRow).join('')}
       </div>`).join('');
-  }else{
-    box.innerHTML = d.items.map(recordRow).join('');
   }
   $('#recPager').hidden = d.pages < 2;
   $('#recPage').textContent = `${d.page} / ${d.pages}`;
@@ -1354,7 +1412,6 @@ function bindDelete(box, fn){
 $('#recSearch').onclick = () => { records.q = $('#recQ').value.trim(); records.load(1); };
 $('#recQ').onkeydown = e => { if(e.key === 'Enter'){ e.preventDefault(); $('#recSearch').click(); } };
 $('#recKind').onchange = e => { records.kind = e.currentTarget.value; records.load(1); };
-$('#recWeekly').onchange = e => { records.weekly = e.currentTarget.checked; records.load(1); };
 $('#recPrev').onclick = () => records.load(records.page - 1);
 $('#recNext').onclick = () => records.load(records.page + 1);
 

@@ -31,6 +31,9 @@ def shorts_item(row: sqlite3.Row, user: dict, with_text: bool = False) -> dict:
     }
     if with_text:
         item['text'] = row['text']
+        item['transcript'] = row['transcript']
+        item['transcriptStatus'] = row['transcript_status']
+        item['transcriptError'] = row['transcript_error']
     return item
 
 
@@ -114,6 +117,22 @@ def get_shorts(shorts_id: int, user: dict = Depends(current_user), db: sqlite3.C
     if not item:
         raise HTTPException(404, '기록을 찾을 수 없어요.')
     return item
+
+
+@router.post('/shorts/{shorts_id}/transcript')
+async def make_transcript(shorts_id: int, request: Request, user: dict = Depends(current_user),
+                    db: sqlite3.Connection = Depends(get_db)):
+    """설교 대본을 (다시) 받아쓴다. 기획할 때 자동으로 만들지만, 실패했거나 예전 기록이면 여기서 만든다."""
+    row = db.execute('SELECT transcript_status FROM shorts WHERE id = ?', (shorts_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, '기록을 찾을 수 없어요.')
+    if row['transcript_status'] == 'running':
+        raise HTTPException(409, '이미 설교 대본을 만들고 있어요.')
+    with db:
+        db.execute("UPDATE shorts SET transcript_status = 'running', transcript_error = NULL WHERE id = ?",
+                   (shorts_id,))
+    request.app.state.jobs.start_transcript(shorts_id)
+    return {'transcriptStatus': 'running'}
 
 
 @router.delete('/shorts/{shorts_id}')

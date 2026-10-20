@@ -1,6 +1,6 @@
 """1단계: 로그인, 세션, 역할, Origin 검사."""
 from app import auth
-from app.db import now_ms
+from app.db import MIGRATIONS, now_ms
 from conftest import ADMIN, CLIENT_ID, MEMBER, login
 
 
@@ -134,5 +134,5 @@ def test_require_admin(client, add_member):
 
 
 def test_schema_version(db):
-    assert db.execute('PRAGMA user_version').fetchone()[0] == 1
+    assert db.execute('PRAGMA user_version').fetchone()[0] == len(MIGRATIONS)
     assert db.execute('PRAGMA journal_mode').fetchone()[0] == 'wal'

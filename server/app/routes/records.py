@@ -101,7 +101,8 @@ def _select(base: str, text_expr: str, toks: list[dict]) -> tuple[str, list]:
 
 SETLIST_SQL = 'SELECT playlist_id, title, url, ok, total, songs_json, created_at FROM setlists'
 SHORTS_SQL = ('SELECT s.id, s.video_id, s.start_sec, s.end_sec, s.title, s.sermon_title, s.created_by, '
-              's.created_at, u.name AS by_name FROM shorts s LEFT JOIN users u ON u.email = s.created_by')
+              "s.created_at, s.transcript <> '' AS has_transcript, u.name AS by_name "
+              'FROM shorts s LEFT JOIN users u ON u.email = s.created_by')
 
 
 def _setlists(db: sqlite3.Connection, toks: list[dict], user: dict) -> list[dict]:
@@ -112,62 +113,67 @@ def _setlists(db: sqlite3.Connection, toks: list[dict], user: dict) -> list[dict
         songs = [s.get('name') or '' for s in json.loads(r['songs_json'])]
         dates = _dates('setlist', r['title'], r['created_at'])
         hits = [bool(r[f'kw{i}']) for i in range(len(toks))]
-        if not _matches(toks, r['title'] + ' ' + ' '.join(songs), dates, hits):
-            continue
         out.append({'kind': 'setlist', 'key': r['playlist_id'], 'title': r['title'], 'url': r['url'],
                     'at': r['created_at'], 'ok': r['ok'], 'total': r['total'],
                     'songs': [s for s in songs if s][:30],
-                    'canDelete': user['role'] == 'admin', **dates})
+                    'canDelete': user['role'] == 'admin', **dates,
+                    '_hit': _matches(toks, r['title'] + ' ' + ' '.join(songs), dates, hits)})
     return out
 
 
 def _shorts(db: sqlite3.Connection, toks: list[dict], user: dict) -> list[dict]:
-    sql, params = _select(SHORTS_SQL, "s.title || ' ' || s.sermon_title || ' ' || s.extra || ' ' || s.text", toks)
+    text_expr = "s.title || ' ' || s.sermon_title || ' ' || s.extra || ' ' || s.text || ' ' || s.transcript"
+    sql, params = _select(SHORTS_SQL, text_expr, toks)
     out = []
     for r in db.execute(sql, params):
         dates = _dates('shorts', r['title'], r['created_at'])
         topic = r['sermon_title'] or (r['title'].split('·', 1)[1].strip() if '·' in r['title'] else '')
         hits = [bool(r[f'kw{i}']) for i in range(len(toks))]
-        if not _matches(toks, r['title'] + ' ' + topic, dates, hits):
-            continue
         out.append({'kind': 'shorts', 'key': str(r['id']), 'id': r['video_id'], 'title': r['title'],
                     'at': r['created_at'], 'start': r['start_sec'], 'end': r['end_sec'], 'topic': topic,
                     'by': r['created_by'], 'byName': r['by_name'] or r['created_by'].split('@')[0],
-                    'canDelete': user['role'] == 'admin' or r['created_by'] == user['email'], **dates})
+                    'hasTranscript': bool(r['has_transcript']),
+                    'canDelete': user['role'] == 'admin' or r['created_by'] == user['email'], **dates,
+                    '_hit': _matches(toks, r['title'] + ' ' + topic, dates, hits)})
     return out
 
 
 @router.get('')
 def list_records(kind: str = Query('all', pattern='^(all|setlist|shorts)$'), q: str = Query('', max_length=200),
-                 page: int = Query(1, ge=1), weekly: bool = False, size: int = Query(PAGE_SIZE, ge=1, le=50),
+                 page: int = Query(1, ge=1), size: int = Query(PAGE_SIZE, ge=1, le=50),
                  user: dict = Depends(current_user), db: sqlite3.Connection = Depends(get_db)):
+    """언제나 주일 예배 기준으로 묶어서 돌려준다(페이지도 주 단위).
+
+    검색은 '찬양 제목으로 찾으면 그 주의 쇼츠 기획도 같이' 보이게, 맞은 기록이 있는 주를 통째로 돌려준다.
+    """
     toks = _tokens(q)
     items: list[dict] = []
     if kind in ('all', 'setlist'):
         items += _setlists(db, toks, user)
     if kind in ('all', 'shorts'):
         items += _shorts(db, toks, user)
+    if toks:
+        weeks = {it['week'] for it in items if it['_hit']}
+        items = [it for it in items if it['week'] in weeks]
+    for it in items:
+        del it['_hit']
     items.sort(key=lambda it: (it['date'], it['at']), reverse=True)
-    counts = {'setlist': sum(1 for it in items if it['kind'] == 'setlist'),
-              'shorts': sum(1 for it in items if it['kind'] == 'shorts')}
 
-    if weekly:
-        # 주일 예배 기준: 같은 주의 세트리스트와 쇼츠 기획을 한 묶음으로 보여 주고, 페이지도 주 단위로 센다.
-        groups: dict[str, dict] = {}
-        for it in items:
-            g = groups.setdefault(it['week'], {'week': it['week'], 'label': it['weekLabel'], 'items': []})
-            g['items'].append(it)
-        for g in groups.values():
-            g['items'].sort(key=lambda it: (it['kind'] != 'setlist', -it['at']))
-        rows: list = list(groups.values())
-    else:
-        rows = items
+    groups: dict[str, dict] = {}
+    for it in items:
+        g = groups.setdefault(it['week'], {'week': it['week'], 'label': it['weekLabel'], 'items': []})
+        g['items'].append(it)
+    for g in groups.values():
+        # 한 주 안에서는 세트리스트 먼저, 그다음 쇼츠 기획
+        g['items'].sort(key=lambda it: (it['kind'] != 'setlist', -it['at']))
 
+    rows = list(groups.values())
     pages = max(1, -(-len(rows) // size))
     page = min(page, pages)
-    out = {'page': page, 'pages': pages, 'total': len(items), 'counts': counts, 'weekly': weekly}
-    out['groups' if weekly else 'items'] = rows[(page - 1) * size: page * size]
-    return out
+    return {'page': page, 'pages': pages, 'total': len(items), 'weeks': len(rows),
+            'counts': {'setlist': sum(1 for it in items if it['kind'] == 'setlist'),
+                       'shorts': sum(1 for it in items if it['kind'] == 'shorts')},
+            'groups': rows[(page - 1) * size: page * size]}
 
 
 # ---------- 상세 ----------
