@@ -14,7 +14,7 @@ from . import auth, gemini
 from .config import Settings
 from .db import connect, init_db, seed_admins
 from .jobs import JobRunner, mark_interrupted
-from .routes import admin, shorts
+from .routes import admin, records, shorts
 
 # 정적 파일 위치: 저장소 루트(web/, vendor/, fonts/). 컨테이너에서는 STATIC_ROOT로 지정한다.
 STATIC_ROOT = Path(os.environ.get('STATIC_ROOT') or Path(__file__).resolve().parents[2])
@@ -64,6 +64,7 @@ def create_app(settings: Settings | None = None,
 
     app.include_router(auth.router)
     app.include_router(shorts.router)
+    app.include_router(records.router)
     app.include_router(admin.router)
 
     for name in ('vendor', 'fonts'):

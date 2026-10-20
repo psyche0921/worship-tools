@@ -1,6 +1,5 @@
-"""3단계: 관리자 전용 API(세트리스트 기록, 설정, 팀원, v1 가져오기)."""
+"""3단계: 관리자 전용 API(세트리스트 기록, 설정, 팀원)."""
 import json
-from pathlib import Path
 
 import pytest
 
@@ -23,7 +22,7 @@ ADMIN_ONLY = [
     ('post', '/api/setlists', setlist_body()), ('delete', f'/api/setlists/{PID}', None),
     ('get', '/api/settings', None), ('put', '/api/settings', {'model': 'x'}),
     ('get', '/api/members', None), ('post', '/api/members', {'email': 'a@b.co'}),
-    ('delete', '/api/members/a@b.co', None), ('post', '/api/import', {}),
+    ('delete', '/api/members/a@b.co', None),
 ]
 
 
@@ -121,54 +120,3 @@ def test_removed_member_is_logged_out(client, add_member):
         client.delete(f'/api/members/{MEMBER}')
         assert member.get('/api/me').status_code == 401
 
-
-# ---------- v1 기록 가져오기 ----------
-
-V1_EXPORT = {
-    'app': 'worship-tools', 'version': 1,
-    'setlist': [
-        {'key': PID, 'title': 'Setlist 261011', 'url': f'https://www.youtube.com/playlist?list={PID}',
-         'at': 1760000000000, 'ok': 2, 'total': 2, 'songs': SONGS},
-        {'key': 'bad', 'songs': SONGS},
-        'garbage',
-    ],
-    'shorts': [
-        {'key': 's1760100000000', 'id': 'dQw4w9WgXcQ', 'start': 3750, 'end': 6310, 'text': '## 쇼츠 1',
-         'at': 1760100000000, 'title': '251012 쇼츠 기획', 'extra': ''},
-        {'key': 's1', 'id': 'dQw4w9WgXcQ', 'text': '', 'at': 1},
-    ],
-    'skillText': '# 지침',
-}
-
-
-def test_import_v1(client):
-    login(client, ADMIN)
-    r = client.post('/api/import', json=V1_EXPORT).json()
-    assert r == {'setlist': {'added': 1, 'skipped': 2}, 'shorts': {'added': 1, 'skipped': 1}, 'skill': '# 지침'}
-    # 같은 파일을 다시 가져와도 중복되지 않는다
-    r = client.post('/api/import', json=V1_EXPORT).json()
-    assert r['setlist']['added'] == 0 and r['shorts']['added'] == 0
-
-    sl = client.get(f'/api/setlists/{PID}').json()
-    assert sl['at'] == 1760000000000 and sl['songs'] == SONGS
-    [sh] = client.get('/api/shorts').json()['items']
-    assert sh['at'] == 1760100000000 and sh['title'] == '251012 쇼츠 기획' and sh['start'] == 3750
-    assert client.get(f"/api/shorts/{sh['key']}").json()['text'] == '## 쇼츠 1'
-    # SKILL.md는 자동으로 바꾸지 않는다(화면에서 물어본 뒤 PUT /api/settings)
-    assert client.get('/api/settings').json()['skill'] == ''
-
-
-def test_import_fixture_shorts_response(client):
-    """실제 쇼츠 응답 샘플(#t= 표기 포함)도 원문 그대로 들어간다."""
-    text = (Path(__file__).parent / 'fixtures' / 'shorts-response.md').read_text(encoding='utf-8')
-    login(client, ADMIN)
-    data = {'shorts': [{'key': 's1760200000000', 'id': 'dQw4w9WgXcQ', 'text': text, 'at': 1760200000000}]}
-    assert client.post('/api/import', json=data).json()['shorts']['added'] == 1
-    [sh] = client.get('/api/shorts').json()['items']
-    assert client.get(f"/api/shorts/{sh['key']}").json()['text'] == text
-
-
-def test_import_empty(client):
-    login(client, ADMIN)
-    r = client.post('/api/import', json={}).json()
-    assert r == {'setlist': {'added': 0, 'skipped': 0}, 'shorts': {'added': 0, 'skipped': 0}, 'skill': ''}

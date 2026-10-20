@@ -20,13 +20,14 @@
 
 | 기능 | 관리자 | 팀원 |
 |---|---|---|
-| 세트리스트 → 재생목록, 세트리스트 기록 | ✅ | ❌ (메뉴 없음, API도 403) |
+| 세트리스트 → 재생목록 만들기 | ✅ | ❌ (메뉴 없음, API도 403) |
 | 쇼츠 기획 생성, 설교 구간 찾기, PDF 공유 | ✅ | ✅ |
 | 쇼츠 기록 보기 | ✅ 전체 | ✅ 전체 |
 | 쇼츠 기록 삭제 | ✅ 전체 | 본인이 만든 것만 |
+| 작업 기록 보기(세트리스트 + 쇼츠, 검색·주일 묶음) | ✅ | ✅ |
+| 세트리스트 기록 삭제 | ✅ | ❌ |
 | 설정 (SKILL.md, 모델) | ✅ | ❌ |
 | 팀원 관리 (허용 이메일) | ✅ | ❌ |
-| v1 기록 가져오기 | ✅ | ❌ |
 
 **권한은 서버에서 확인합니다.** 화면에서 메뉴를 숨기는 것은 편의일 뿐이고, 모든 API가 세션의 역할을 직접 검사합니다.
 
@@ -132,36 +133,36 @@ jobs     (id TEXT PK, kind TEXT, status TEXT, input_json TEXT, result_json TEXT,
 | `GET /api/shorts?before=` | 로그인 | 목록(최신순, 20개씩). 원문 없이 메타만 |
 | `GET /api/shorts/{id}` | 로그인 | 원문 포함 |
 | `DELETE /api/shorts/{id}` | 만든 사람 · 관리자 | 삭제 |
+| `GET /api/records?kind=&q=&page=&weekly=&size=` | 로그인 | 작업 기록 목록. 세트리스트와 쇼츠를 함께, 10개씩. `q`는 날짜(261115, 2026-11-15)와 키워드(곡 제목, 설교 주제, 쇼츠 본문)를 모두 찾고 조각은 AND. `weekly=true`면 주일별로 묶고 페이지도 주 단위 |
+| `GET /api/records/setlist/{재생목록 ID}` | 로그인 | 세트리스트 상세(원본 메시지는 관리자에게만). 쇼츠 상세는 `/api/shorts/{id}` |
 | `GET /api/setlists`, `GET /api/setlists/{재생목록 ID}` | 관리자 | 목록 / 상세(원본 메시지 포함) |
 | `POST /api/setlists` | 관리자 | 재생목록을 만든 뒤 결과 저장(원본 메시지 포함) |
 | `DELETE /api/setlists/{재생목록 ID}` | 관리자 | 기록 삭제(YouTube 재생목록은 지우지 않음) |
 | `GET/PUT /api/settings` | 관리자 | SKILL.md, 모델 |
 | `GET/POST/DELETE /api/members` | 관리자 | 허용 이메일 관리(관리자 자신은 삭제 불가) |
-| `POST /api/import` | 관리자 | v1 기록 JSON 가져오기 |
 
 ## 8. 화면 변경
 
 - **처음 화면**: 로그인 전에는 로그인 카드만 보입니다. 등록되지 않은 계정이면 "관리자에게 이메일 등록을 요청하세요"라고 안내합니다.
-- **탭**: 관리자에게는 `세트리스트 | 쇼츠 기획 | 설정`을, 팀원에게는 탭 없이 쇼츠 기획만 보여 줍니다.
-- **설정**: OAuth 클라이언트 ID와 Gemini 키 입력칸은 없앱니다(서버 설정으로 옮김). 관리자 설정 탭에서는 SKILL.md 편집, 모델명, 팀원 이메일 추가·삭제, v1 기록 가져오기를 할 수 있습니다.
-- **쇼츠 기록**: 각 항목에 만든 사람 이름을 붙이고, 삭제 버튼은 권한이 있을 때만 보여 줍니다.
+- **탭**: 관리자에게는 `세트리스트 | 쇼츠 기획 | 작업 기록 | 설정`을, 팀원에게는 `쇼츠 기획 | 작업 기록`을 보여 줍니다.
+- **작업 기록 탭**: 세트리스트와 쇼츠 기획 기록을 한 목록에서 종류를 구분해 보여 주고(10개씩, 페이지 넘기기), 날짜·키워드로 검색하고, '주일 예배 기준' 체크로 같은 주의 기록을 묶어 그 주에 부른 찬양과 설교 주제를 함께 봅니다. 줄을 누르면 상세(세트리스트는 곡 목록과 재생목록 링크, 쇼츠는 본문과 PDF)가 열리고, 권한이 있으면 거기서 지웁니다.
+- **설정**: OAuth 클라이언트 ID와 Gemini 키 입력칸은 없앱니다(서버 설정으로 옮김). 관리자 설정 탭에서는 SKILL.md 편집, 모델명, 팀원 이메일 추가·삭제를 할 수 있습니다.
+- **쇼츠 기록**: 각 항목에 만든 사람 이름을 붙이고, 삭제 버튼은 권한이 있을 때만 보여 줍니다(작업 기록 탭의 상세에서).
 - **세트리스트**: 파싱, 미리보기, 재생목록 생성은 그대로입니다. 생성이 끝나면 `POST /api/setlists`로 저장합니다.
 - 그대로 두는 것: 파서 블록(`<script id="parser">`), `cleanText`, 타임스탬프 링크, 시작 시각 보정, jsPDF PDF와 공유창, 2단계 삭제 확인.
 - `localStorage`에는 마지막 탭 같은 편의 정보만 남깁니다.
 
-## 9. v1 기록 옮기기
+## 9. v1 기록 옮기기 (2026-10-20 취소)
 
-`localStorage`는 출처(origin)마다 따로라서 `bbc.ppsoft.kr`에서는 `psyche0921.github.io`의 기록을 읽을 수 없습니다. 기기(폰, PC)마다 기록도 따로입니다. 그래서 다음 순서로 옮깁니다.
+예전 기록은 옮기지 않기로 했습니다. v2 관리자 설정의 **가져오기**(`POST /api/import`)는 뺐습니다. v2는 빈 DB로 시작하고, v1 기록은 GitHub Pages 쪽 `localStorage`에 그대로 남습니다.
 
-1. v1 페이지(GitHub Pages)에 **"기록 내보내기"** 버튼을 추가합니다. `hist.setlist`, `hist.shorts`, `shortsLast`, `skillText`를 JSON 파일 하나로 내려받거나 공유창으로 보냅니다.
-2. 기록이 있는 기기마다 내보내기를 실행합니다.
-3. v2 관리자 설정에서 **가져오기**로 파일을 올립니다. 중복은 키(`playlist_id`, `legacy_key`)로 건너뜁니다. 가져온 기록의 만든 사람은 관리자로 둡니다.
-4. 내보낸 파일에 `skillText`가 있으면 SKILL.md 설정 값으로 쓸지 물어봅니다.
+- v1 페이지(`index.html`)의 "기록 내보내기" 버튼은 아직 남아 있지만 받아 줄 곳이 없습니다.
+- `shorts.legacy_key` 칸은 스키마에 남아 있습니다(마이그레이션은 덧붙이기만 합니다). 이제 아무것도 쓰지 않습니다.
 
 ## 10. 저장소 구성
 
 ```
-index.html            v1 그대로 유지(GitHub Pages). "기록 내보내기" 버튼만 추가
+index.html            v1 그대로 유지(GitHub Pages)
 web/index.html        v2 화면. vendor/, fonts/는 루트의 것을 같이 씀
 server/
   app/main.py         FastAPI 앱, 정적 파일, 라우터 연결
@@ -169,7 +170,7 @@ server/
   app/auth.py         ID 토큰 검증, 세션, 권한 의존성
   app/jobs.py         백그라운드 작업 실행기
   app/gemini.py       Gemini 호출, 프롬프트 구성
-  app/routes/*.py     shorts, setlists, settings, members, import
+  app/routes/*.py     shorts, records(작업 기록 보기), setlists, settings, members
   requirements.txt
   Dockerfile
 deploy/
@@ -231,7 +232,7 @@ PC에서 `ssh tstech@192.168.0.170 '~/worship-tools/deploy/deploy.sh'`를 실행
 2. **쇼츠**: 작업 실행기, Gemini 호출, 쇼츠 기록 API, 사용량 제한
 3. **세트리스트 기록, 설정, 팀원 API**
 4. **화면(`web/index.html`)**: v1을 복사해서 로그인, 역할별 탭, API 저장소, 작업 폴링 적용. Playwright 테스트
-5. **v1 내보내기 버튼 + v2 가져오기**
+5. ~~v1 내보내기 버튼 + v2 가져오기~~ (2026-10-20 취소, 9장 참고)
 6. **배포**: Dockerfile, compose, nginx 설정, deploy/backup 스크립트 → 170번 서버에 배포
 7. **실제 검증**: 사용자의 SKILL.md와 실제 라이브 영상으로 쇼츠 카드 분리와 PDF 레이아웃 확인, 팀원 계정 로그인 확인
 8. **정리**: 기록 이전이 끝나면 GitHub Pages를 v2 안내 페이지로 바꾸거나 끕니다

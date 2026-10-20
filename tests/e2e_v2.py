@@ -2,20 +2,18 @@
 v2 브라우저 통합 테스트 (web/index.html + FastAPI 서버).
 
 실제 서버(uvicorn)를 임시 DB로 띄우고, Google 로그인·ID 토큰 검증·Gemini·YouTube는 가짜로 바꿔서
-관리자/팀원/미등록 사용자 흐름, v1 기록 내보내기 → v2 가져오기, 작업 폴링(새로고침 후 이어 받기),
+관리자/팀원/미등록 사용자 흐름, 작업 기록(검색·페이지·주일 묶음), 작업 폴링(새로고침 후 이어 받기),
 #t= 표기 제거, PDF를 확인합니다.
 
     .venv/Scripts/python -m pip install -r server/requirements-dev.txt playwright pypdf
     .venv/Scripts/python tests/e2e_v2.py
 """
 import asyncio
-import functools
-import http.server
+import datetime
 import io
 import json
 import pathlib
 import socket
-import socketserver
 import sys
 import tempfile
 import threading
@@ -89,15 +87,6 @@ def start_v2(db_path, gem):
     return server, f'http://127.0.0.1:{port}'
 
 
-def start_v1():
-    class Quiet(http.server.SimpleHTTPRequestHandler):
-        def log_message(self, *a):
-            pass
-    srv = socketserver.TCPServer(('127.0.0.1', 0), functools.partial(Quiet, directory=str(ROOT)))
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
-    return srv, f'http://127.0.0.1:{srv.server_address[1]}/index.html'
-
-
 def youtube_route(counter):
     def handle(route):
         if 'playlists?' in route.request.url:
@@ -134,37 +123,6 @@ def api(pg, path, method='GET'):
         return {status: r.status, body: await r.json().catch(() => null)}; }""", [path, method])
 
 
-def export_from_v1(browser, errors):
-    """v1 페이지에 기록을 심어 두고 '기록 내보내기'로 파일을 받는다."""
-    srv, url = start_v1()
-    hist_setlist = [{'key': 'PLv1imported0001', 'title': 'Setlist 261011', 'url': 'https://www.youtube.com/playlist?list=PLv1imported0001',
-                     'at': 1760000000000, 'ok': 1, 'total': 1, 'songs': [{'id': VIDEO, 'name': '예전 곡', 'notes': ['KEY - G']}]}]
-    hist_shorts = [{'key': 's1760100000000', 'id': VIDEO, 'start': 2334, 'end': 4800, 'text': SHORTS,
-                    'at': 1760100000000, 'title': '251012 쇼츠 기획 · 예전 설교', 'extra': ''}]
-    ctx = browser.new_context(accept_downloads=True)
-    ctx.add_init_script(f"""localStorage.setItem('hist.setlist', {json.dumps(json.dumps(hist_setlist))});
-        localStorage.setItem('hist.shorts', {json.dumps(json.dumps(hist_shorts, ensure_ascii=False))});
-        localStorage.setItem('skillText', {json.dumps(SKILL + '\n추가 줄')});
-        localStorage.setItem('geminiKey', 'AIzaSECRET');""")
-    pg = ctx.new_page()
-    pg.on('pageerror', lambda e: errors.append('v1: ' + str(e)))
-    pg.route('**/accounts.google.com/**', lambda r: r.fulfill(status=200, content_type='text/javascript', body=''))
-    pg.goto(url)
-    if not pg.eval_on_selector('#settings', 'e => e.open'):
-        pg.click('#settings summary')
-    with pg.expect_download() as d:
-        pg.click('#exportBtn')
-    path = pathlib.Path(tempfile.mkdtemp()) / d.value.suggested_filename
-    d.value.save_as(path)
-    data = json.loads(path.read_text(encoding='utf-8'))
-    assert d.value.suggested_filename.startswith('worship-tools-기록_')
-    assert len(data['setlist']) == 1 and len(data['shorts']) == 1
-    assert 'AIzaSECRET' not in path.read_text(encoding='utf-8'), 'API 키가 내보내기 파일에 들어감'
-    ctx.close()
-    srv.shutdown()
-    return path
-
-
 def main():
     tmp = tempfile.mkdtemp()
     gem = FakeGemini()
@@ -173,7 +131,6 @@ def main():
 
     with sync_playwright() as p:
         browser = p.chromium.launch()
-        export_file = export_from_v1(browser, errors)
 
         # ---------- 미등록 계정 ----------
         ctx, pg = new_page(browser, f'ok:{STRANGER}', errors, counter)
@@ -186,7 +143,6 @@ def main():
 
         # ---------- 관리자 ----------
         ctx, pg = new_page(browser, f'ok:{ADMIN}', errors, counter)
-        pg.on('dialog', lambda d: d.accept())
         login(pg, base)
         assert '관리자' in pg.inner_text('#whoami')
         assert pg.is_visible('#tabs') and pg.is_visible('#tab-setlist')
@@ -204,19 +160,8 @@ def main():
         pg.wait_for_function("document.querySelectorAll('#memberList .mrow').length === 2")
         assert pg.locator('#memberList .mrow').nth(0).locator('button').count() == 0  # 관리자는 삭제 버튼 없음
 
-        # v1 기록 가져오기 (SKILL.md가 달라서 바꿀지 물어봄 → 수락)
-        pg.set_input_files('#importFile', str(export_file))
-        pg.wait_for_function("document.querySelector('#importMsg').textContent.includes('SKILL.md도 바꿨어요')")
-        assert '세트리스트 1개' in pg.inner_text('#importMsg') and '쇼츠 1개' in pg.inner_text('#importMsg')
-        assert pg.input_value('#skillText').endswith('추가 줄')
-        # 테스트를 위해 지침을 원래대로
-        pg.fill('#skillText', SKILL)
-        pg.click('#saveSettings')
-        pg.wait_for_function("document.querySelector('#skillMeta').textContent.includes('마지막 수정')")
-
         # 세트리스트 → 재생목록 2개
         pg.click('.tabs button[data-tab=setlist]')
-        assert pg.inner_text('#histCount-setlist') == '1'
         pg.fill('#input', SETLIST)
         pg.click('#parseBtn')
         assert pg.locator('#blocks > .card').count() == 4
@@ -224,21 +169,10 @@ def main():
         pg.wait_for_selector('#blocks .card >> nth=0 >> .result')
         pg.locator('#blocks .create').nth(1).click()
         pg.wait_for_selector('#blocks .card >> nth=1 >> .result')
-        pg.wait_for_function("document.querySelector('#histCount-setlist').textContent === '3'")
+        pg.wait_for_function("""async () => (await (await fetch('/api/setlists')).json()).items.length === 3""")
         saved = api(pg, '/api/setlists/PLtestplaylist1')
         assert saved['status'] == 200 and saved['body']['rawMessage'] == SETLIST.replace('\r', ''), saved['status']
         assert saved['body']['title'] == 'Setlist 261118'
-
-        # 기록 열기 / 2단계 삭제
-        pg.click('#tab-setlist details.hist summary')
-        pg.locator('#hist-setlist .hopen').nth(1).click()
-        assert pg.input_value('#setlistView .link').endswith('PLtestplaylist1')
-        assert pg.locator('#setlistView .song').count() == 3
-        pg.locator('#hist-setlist .hdel').nth(0).click()
-        assert pg.inner_text('#histCount-setlist') == '3'
-        pg.locator('#hist-setlist .hdel').nth(0).click()
-        pg.wait_for_function("document.querySelector('#histCount-setlist').textContent === '2'")
-        assert api(pg, '/api/setlists/PLtestplaylist2')['status'] == 404
 
         # 쇼츠 기획 (서버 작업 + 폴링)
         pg.click('.tabs button[data-tab=shorts]')
@@ -252,11 +186,10 @@ def main():
         assert '#t=' not in out_html, '화면에 #t= 표기가 남아 있음'
         assert pg.locator('#shortsOut a.ts').first.get_attribute('href') == f'https://youtu.be/{VIDEO}?t=2334'
         assert '두려움을 이기는 믿음' in pg.inner_text('#shortsOut .vh-title')
-        assert pg.inner_text('#histCount-shorts') == '2'
 
         # PDF
         with pg.expect_download() as d:
-            pg.click('#pdfSave')
+            pg.click('#shortsOut .pdfSave')
         dl = d.value
         assert dl.suggested_filename.startswith('쇼츠기획_') and dl.suggested_filename.endswith('.pdf')
         reader = PdfReader(io.BytesIO(pathlib.Path(dl.path()).read_bytes()))
@@ -265,24 +198,115 @@ def main():
         uris = [a.get_object()['/A']['/URI'] for page in reader.pages for a in page.get('/Annots', [])]
         assert f'https://youtu.be/{VIDEO}?t=2412' in uris, uris[:5]
 
-        # 새로고침 → 로그인 유지, 기록 유지, 최신 쇼츠 표시
+        # 새로고침 → 로그인 유지, 최신 쇼츠 표시
         pg.reload()
         pg.wait_for_selector('#app:not([hidden])')
-        pg.wait_for_function("document.querySelector('#histCount-shorts').textContent === '2'")
         pg.wait_for_selector('#shortsOut .md')
+
+        # ---------- 작업 기록 (세트리스트 + 쇼츠 기획을 한곳에서) ----------
+        # 페이지 넘기기와 주일 묶음을 보려고 기록을 더 심는다(이번 주일 + 지난 10주).
+        sunday = datetime.date.today()
+        sunday -= datetime.timedelta(days=(sunday.weekday() + 1) % 7)
+        seeds = []
+        for i in range(11):
+            d = sunday - datetime.timedelta(days=7 * i)
+            seeds.append({'playlistId': f'PLseed{i:012d}', 'title': f'Setlist {d:%y%m%d}', 'ok': 1, 'total': 1,
+                          'url': f'https://www.youtube.com/playlist?list=PLseed{i:012d}',
+                          'songs': [{'id': VIDEO, 'name': '씨앗 찬양', 'notes': []}], 'rawMessage': ''})
+        seeded = pg.evaluate("""async (rows) => { const out = [];
+            for(const body of rows){ const r = await fetch('/api/setlists', {method: 'POST',
+              headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)}); out.push(r.status); }
+            return out; }""", seeds)
+        assert seeded == [200] * 11, seeded
+
+        pg.click('.tabs button[data-tab=records]')
+        pg.wait_for_selector('#recList .hrow')
+        assert pg.inner_text('#recCount') == '세트리스트 13 · 쇼츠 기획 1'
+
+        # 10개씩 + 페이지 넘기기
+        assert pg.locator('#recList .hrow').count() == 10 and pg.inner_text('#recPage') == '1 / 2'
+        pg.click('#recNext')
+        pg.wait_for_function("document.querySelector('#recPage').textContent === '2 / 2'")
+        assert pg.locator('#recList .hrow').count() == 4
+        pg.click('#recPrev')
+        pg.wait_for_function("document.querySelector('#recPage').textContent === '1 / 2'")
+
+        # 종류 구분
+        assert set(pg.locator('#recList .kind').all_inner_texts()) <= {'세트리스트', '쇼츠 기획'}
+        pg.select_option('#recKind', 'shorts')
+        pg.wait_for_function("document.querySelectorAll('#recList .hrow').length === 1")
+        assert set(pg.locator('#recList .kind').all_inner_texts()) == {'쇼츠 기획'}
+        pg.select_option('#recKind', 'all')
+        pg.wait_for_function("document.querySelectorAll('#recList .hrow').length === 10")
+
+        # 날짜로 검색 → 세트리스트 상세
+        pg.fill('#recQ', '261118')
+        pg.click('#recSearch')
+        pg.wait_for_function("document.querySelectorAll('#recList .hrow').length === 1")
+        assert pg.locator('#recList .hrow').first.get_attribute('data-key') == 'PLtestplaylist1'
+        pg.click('#recList .hopen')
+        pg.wait_for_selector('#recordView .song')
+        assert pg.input_value('#recordView .link').endswith('PLtestplaylist1')
+        assert pg.locator('#recordView .song').count() == 3
+
+        # 주제 키워드로 검색 → 쇼츠 기획 상세 (본문까지 찾는다)
+        pg.fill('#recQ', '두려움')
+        pg.click('#recSearch')
+        pg.wait_for_function("document.querySelectorAll('#recList .hrow').length === 1")
+        assert set(pg.locator('#recList .kind').all_inner_texts()) == {'쇼츠 기획'}
+        pg.locator('#recList .hopen').first.click()
+        pg.wait_for_selector('#recordView .md')
+        assert '#t=' not in pg.inner_html('#recordView')
+        assert pg.locator('#recordView a.ts').first.get_attribute('href') == f'https://youtu.be/{VIDEO}?t=2334'
+        assert '두려움을 이기는 믿음' in pg.inner_text('#recordView .vh-title')
+        pg.click('#recordView .close')
+        pg.wait_for_function("!document.querySelector('#recordView .md')")
+
+        # 주일 예배 기준: 같은 주의 세트리스트와 쇼츠 기획이 한 묶음
+        pg.fill('#recQ', f'{sunday:%y%m%d}')
+        pg.click('#recSearch')
+        pg.check('#recWeekly')
+        pg.wait_for_selector('#recList .wk')
+        assert pg.locator('#recList .wk').count() == 1
+        assert pg.locator('#recList .wk .kind').all_inner_texts() == ['세트리스트', '쇼츠 기획']
+        assert f'{sunday.year}년 {sunday.month}월 {sunday.day}일 주일' in pg.locator('#recList .wk-h').first.inner_text()
+        pg.uncheck('#recWeekly')
+        pg.wait_for_function("!document.querySelector('#recList .wk')")
+
+        # 상세에서 2단계 삭제
+        pg.fill('#recQ', '261011')
+        pg.click('#recSearch')
+        pg.wait_for_selector('#recList .hrow[data-key=PLtestplaylist2]')
+        pg.click('#recList .hrow[data-key=PLtestplaylist2] .hopen')
+        pg.wait_for_selector('#recordView .del')
+        pg.click('#recordView .del')
+        pg.click('#recordView .del')
+        pg.wait_for_function("!document.querySelector('#recList .hrow[data-key=PLtestplaylist2]')")
+        assert api(pg, '/api/setlists/PLtestplaylist2')['status'] == 404
         admin_ctx, admin_pg = ctx, pg
 
         # ---------- 팀원 ----------
         ctx, pg = new_page(browser, f'ok:{MEMBER}', errors, counter)
         login(pg, base)
         assert '홍길동 · 팀원' == pg.inner_text('#whoami')
-        assert pg.is_hidden('#tabs') and pg.is_hidden('#tab-setlist') and pg.is_hidden('#tab-admin')
+        assert pg.is_visible('#tabs') and pg.is_hidden('#tab-setlist') and pg.is_hidden('#tab-admin')
+        assert pg.locator('.tabs button:visible').all_inner_texts() == ['쇼츠 기획', '작업 기록']
         assert pg.is_visible('#tab-shorts')
-        pg.wait_for_function("document.querySelector('#histCount-shorts').textContent === '2'")
-        pg.click('#tab-shorts details.hist summary')
-        assert pg.locator('#hist-shorts .hdel').count() == 0  # 관리자 기록은 지울 수 없음
         for path in ('/api/setlists', '/api/settings', '/api/members'):
             assert api(pg, path)['status'] == 403, path
+
+        # 팀원도 작업 기록을 본다. 세트리스트 기록도 열 수 있지만(그 주 찬양 확인) 지우지는 못한다.
+        pg.click('.tabs button[data-tab=records]')
+        pg.wait_for_selector('#recList .hrow')
+        assert pg.inner_text('#recCount') == '세트리스트 12 · 쇼츠 기획 1'
+        pg.fill('#recQ', '261118')
+        pg.click('#recSearch')
+        pg.wait_for_selector('#recList .hrow[data-key=PLtestplaylist1]')
+        pg.click('#recList .hopen')
+        pg.wait_for_selector('#recordView .song')
+        assert pg.locator('#recordView .song').count() == 3
+        assert pg.locator('#recordView .del').count() == 0
+        pg.click('.tabs button[data-tab=shorts]')
 
         # 작업 중 새로고침해도 결과를 이어 받는다
         gem.delay = 3
@@ -295,13 +319,21 @@ def main():
         pg.wait_for_function("document.querySelector('#shortsMsg').textContent.includes('진행 중이던')")
         pg.wait_for_function("document.querySelector('#shortsMsg').textContent.startsWith('완료')", timeout=20000)
         gem.delay = 0
-        assert pg.inner_text('#histCount-shorts') == '3'
-        assert '홍길동' in pg.text_content('#hist-shorts .hrow >> nth=0')  # 새로고침으로 기록 목록은 접혀 있음
-        pg.click('#tab-shorts details.hist summary')
-        assert pg.locator('#hist-shorts .hdel').count() == 1  # 본인 것만
-        pg.locator('#hist-shorts .hdel').click()
-        pg.locator('#hist-shorts .hdel').click()
-        pg.wait_for_function("document.querySelector('#histCount-shorts').textContent === '2'")
+
+        # 쇼츠 기록 삭제는 본인이 만든 것만
+        pg.click('.tabs button[data-tab=records]')
+        pg.wait_for_function("document.querySelector('#recCount').textContent === '세트리스트 12 · 쇼츠 기획 2'")
+        pg.select_option('#recKind', 'shorts')
+        pg.wait_for_function("document.querySelectorAll('#recList .hrow').length === 2")
+        assert '홍길동' in pg.locator('#recList .hrow').first.inner_text()
+        pg.locator('#recList .hopen').first.click()
+        pg.wait_for_selector('#recordView .md')
+        pg.click('#recordView .del')
+        pg.click('#recordView .del')
+        pg.wait_for_function("document.querySelectorAll('#recList .hrow').length === 1")
+        pg.locator('#recList .hopen').first.click()  # 관리자가 만든 기록
+        pg.wait_for_selector('#recordView .md')
+        assert pg.locator('#recordView .del').count() == 0
 
         # 로그아웃
         pg.click('#logoutBtn')

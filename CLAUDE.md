@@ -13,8 +13,9 @@
 
 ## v2 구조 (`v2` 브랜치, bbc.ppsoft.kr)
 
-- `server/app/`: FastAPI + SQLite. `auth.py`(Google ID 토큰 → 세션, `require_admin`), `jobs.py`(Gemini 백그라운드 작업), `gemini.py`(프롬프트, v1 문구 그대로), `routes/shorts.py`(팀원도 사용), `routes/admin.py`(관리자 전용).
+- `server/app/`: FastAPI + SQLite. `auth.py`(Google ID 토큰 → 세션, `require_admin`), `jobs.py`(Gemini 백그라운드 작업), `gemini.py`(프롬프트, v1 문구 그대로), `routes/shorts.py`(팀원도 사용), `routes/records.py`(작업 기록 보기, 팀원도 사용), `routes/admin.py`(관리자 전용).
 - `web/index.html`: v2 화면. v1을 바탕으로 저장소만 API로 바꿈. 파서·`cleanText`·PDF 코드를 고치면 v1 `index.html`과 차이가 생기니 v2 쪽을 기준으로 삼습니다.
+- 작업 기록은 탭 하나(`작업 기록`)에 모았습니다. 세트리스트/쇼츠 기획 탭에는 기록 목록이 없습니다. 목록은 10개씩 나눠 주고, 날짜·키워드 검색과 '주일 예배 기준' 묶어 보기를 지원합니다. 기록이 어느 주일 것인지는 제목의 6자리 날짜로 정합니다(없으면 세트리스트는 돌아오는 일요일, 쇼츠는 지난 일요일).
 - 권한은 반드시 서버 의존성(`current_user`, `require_admin`)으로 막습니다. 화면에서 숨기는 것만으로는 안 됩니다.
 - 배포: 170번 서버 `~/worship-tools`에서 `deploy/deploy.sh`(git pull → docker compose). 설정 값은 서버의 `deploy/.env`(git 제외). nginx 설정과 certbot은 sudo가 필요해서 사용자가 실행합니다.
 

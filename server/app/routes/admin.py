@@ -1,11 +1,10 @@
-"""관리자 전용: 세트리스트 기록, 설정(SKILL.md·모델), 팀원 관리, v1 기록 가져오기.
+"""관리자 전용: 세트리스트 기록, 설정(SKILL.md·모델), 팀원 관리.
 
 세트리스트 항목도 v1의 hist.setlist와 같은 모양이다(key=재생목록 ID, title, url, at, ok, total, songs).
 """
 import json
 import re
 import sqlite3
-from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -16,8 +15,6 @@ from ..db import get_setting, now_ms, set_setting
 
 router = APIRouter(prefix='/api', dependencies=[Depends(require_admin)])
 
-PLAYLIST_ID = re.compile(r'^[\w-]{10,64}$')
-VIDEO_ID = re.compile(r'^[\w-]{11}$')
 EMAIL = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
 MODEL = re.compile(r'^[\w.\-]{1,100}$')
 
@@ -175,60 +172,3 @@ def remove_member(email: str, db: sqlite3.Connection = Depends(get_db)):
         db.execute('DELETE FROM users WHERE email = ?', (email.strip().lower(),))
     return list_members(db)
 
-
-# ---------- v1 기록 가져오기 ----------
-
-def _int(v: Any, default: int = 0) -> int:
-    try:
-        return int(v)
-    except (TypeError, ValueError):
-        return default
-
-
-def _str(v: Any, limit: int) -> str:
-    return str(v)[:limit] if isinstance(v, (str, int, float)) else ''
-
-
-@router.post('/import')
-def import_v1(data: dict, user: dict = Depends(require_admin), db: sqlite3.Connection = Depends(get_db)):
-    """v1 '기록 내보내기' 파일. 이미 있는 기록(재생목록 ID, v1 key)은 건너뛴다."""
-    out = {'setlist': {'added': 0, 'skipped': 0}, 'shorts': {'added': 0, 'skipped': 0},
-           'skill': _str(data.get('skillText'), 200_000)}
-    with db:
-        for it in data.get('setlist') or []:
-            if not isinstance(it, dict):
-                out['setlist']['skipped'] += 1
-                continue
-            pid = _str(it.get('key'), 64)
-            songs = [s for s in (it.get('songs') or []) if isinstance(s, dict) and VIDEO_ID.match(_str(s.get('id'), 11))]
-            if not PLAYLIST_ID.match(pid) or not songs:
-                out['setlist']['skipped'] += 1
-                continue
-            songs = [{'id': s['id'], 'name': _str(s.get('name'), 300),
-                      'notes': [_str(n, 500) for n in (s.get('notes') or [])][:50]} for s in songs]
-            cur = db.execute(
-                'INSERT OR IGNORE INTO setlists (playlist_id, title, url, ok, total, songs_json, created_by, created_at) '
-                'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-                (pid, _str(it.get('title'), 150) or '세트리스트',
-                 _str(it.get('url'), 300) or f'https://www.youtube.com/playlist?list={pid}',
-                 _int(it.get('ok'), len(songs)), _int(it.get('total'), len(songs)),
-                 json.dumps(songs, ensure_ascii=False), user['email'], _int(it.get('at'), now_ms())),
-            )
-            out['setlist']['added' if cur.rowcount else 'skipped'] += 1
-
-        for it in data.get('shorts') or []:
-            if not isinstance(it, dict):
-                out['shorts']['skipped'] += 1
-                continue
-            vid, text, at = _str(it.get('id'), 11), _str(it.get('text'), 1_000_000), _int(it.get('at'), 0)
-            if not VIDEO_ID.match(vid) or not text.strip() or not at:
-                out['shorts']['skipped'] += 1
-                continue
-            cur = db.execute(
-                'INSERT OR IGNORE INTO shorts (video_id, start_sec, end_sec, title, extra, text, created_by, '
-                'created_at, legacy_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                (vid, _int(it.get('start')), _int(it.get('end')), _str(it.get('title'), 200) or '쇼츠 기획',
-                 _str(it.get('extra'), 2000), text, user['email'], at, _str(it.get('key'), 64) or f's{at}'),
-            )
-            out['shorts']['added' if cur.rowcount else 'skipped'] += 1
-    return out
