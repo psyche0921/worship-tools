@@ -159,6 +159,22 @@ def main():
         pg.click('#saveSettings')
         pg.wait_for_function("document.querySelector('#settingsMsg').textContent === '저장했어요.'")
         assert '마지막 수정' in pg.inner_text('#skillMeta')
+        # 자동 쇼츠 기획: 체크하면 바로 저장되고, 다른 카드의 저장에도 풀리지 않는다
+        pg.fill('#ytChannel', 'https://www.youtube.com/@bridgechurch_Daejeon/streams')
+        pg.click('#saveAuto')
+        pg.wait_for_function("document.querySelector('#autoMsg').textContent === '저장했어요.'")
+        pg.check('#autoEnabled')
+        pg.wait_for_function("document.querySelector('#autoMsg').textContent.startsWith('켰어요')")
+        assert '켜짐' in pg.inner_text('#autoState')
+        pg.click('#saveSettings')   # 위쪽 카드를 저장해도
+        pg.wait_for_function("document.querySelector('#settingsMsg').textContent === '저장했어요.'")
+        assert pg.is_checked('#autoEnabled') and '켜짐' in pg.inner_text('#autoState')
+        st = api(pg, '/api/settings')['body']
+        assert st['autoEnabled'] is True and st['channel'].endswith('@bridgechurch_Daejeon/streams')
+        pg.uncheck('#autoEnabled')
+        pg.wait_for_function("document.querySelector('#autoMsg').textContent === '껐어요.'")
+        assert api(pg, '/api/settings')['body']['autoEnabled'] is False
+
         pg.fill('#mEmail', MEMBER)
         pg.fill('#mName', '홍길동')
         pg.click('#addMember')

@@ -97,6 +97,7 @@ button.confirm{background:var(--err)!important;color:#fff!important;border-color
 .login{text-align:center;padding:28px 16px}
 .login p{color:var(--muted);font-size:.9rem;margin:6px 0 18px}
 #gsiBtn{display:flex;justify-content:center;min-height:44px}
+.badge.on{color:var(--ok);border-color:var(--ok)}
 .badge{font-size:.72rem;font-weight:600;border:1px solid var(--line);border-radius:99px;padding:0 7px;color:var(--muted);margin-left:6px}
 .mrow{display:flex;gap:8px;align-items:center;border-top:1px solid var(--line);padding:8px 0}
 .mrow:first-child{border-top:0}
@@ -234,7 +235,7 @@ button.confirm{background:var(--err)!important;color:#fff!important;border-color
     </div>
 
     <div class="card">
-      <label>자동 쇼츠 기획</label>
+      <label>자동 쇼츠 기획 <span class="badge" id="autoState">꺼짐</span></label>
       <p class="rec-hint" style="margin:0 0 10px">매주 월요일 오후 1시에 교회 유튜브 채널에서 그 주일 예배 영상을 찾아, 설교 구간 찾기부터 쇼츠 기획·설교 대본까지 만들어 작업 기록에 넣어 둬요. 영상이 아직 없으면 저녁 6시까지 30분마다 다시 봅니다.</p>
       <label class="chk"><input type="checkbox" id="autoEnabled"> 월요일 오후 1시에 자동으로 기획하기</label>
       <div class="field">
@@ -1529,6 +1530,8 @@ function fillSettings(st){
   $('#autoEnabled').checked = !!st.autoEnabled;
   $('#ytChannel').value = st.channel || '';
   const a = st.autoLast || {};
+  $('#autoState').textContent = st.autoEnabled ? '켜짐 · 매주 월요일 오후 1시' : '꺼짐';
+  $('#autoState').className = 'badge' + (st.autoEnabled ? ' on' : '');
   $('#autoMeta').textContent = a.at
     ? `마지막 실행: ${fmtWhen(a.at)} · ${AUTO_LABEL[a.status] || a.status} · ${a.message || ''}`
     : '아직 실행한 적이 없어요.' + (st.youtubeKeySet ? '' : ' (YouTube API 키가 없어서 채널 페이지를 읽어요)');
@@ -1578,14 +1581,23 @@ $('#saveSettings').onclick = async e => {
   finally{ btn.disabled = false; }
 };
 
-$('#saveAuto').onclick = async e => {
-  const btn = e.currentTarget, msg = $('#autoMsg');
-  btn.disabled = true; msg.className = 'msg'; msg.textContent = '';
+async function saveAuto(body, done){
+  const msg = $('#autoMsg');
+  msg.className = 'msg'; msg.textContent = '';
   try{
-    fillSettings(await api('/api/settings', {method: 'PUT', body: {
-      channel: $('#ytChannel').value.trim(), autoEnabled: $('#autoEnabled').checked}}));
-    msg.textContent = '저장했어요.';
-  }catch(err){ msg.className = 'msg err'; msg.textContent = err.message; }
+    fillSettings(await api('/api/settings', {method: 'PUT', body}));
+    msg.textContent = done;
+  }catch(err){ msg.className = 'msg err'; msg.textContent = err.message; fillSettings(await api('/api/settings')); }
+}
+
+// 체크하면 바로 저장한다(저장 버튼이 여러 개라 체크만 해 두면 놓치기 쉬움)
+$('#autoEnabled').onchange = e => saveAuto({autoEnabled: e.currentTarget.checked},
+  e.currentTarget.checked ? '켰어요. 매주 월요일 오후 1시에 자동으로 기획해요.' : '껐어요.');
+
+$('#saveAuto').onclick = async e => {
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  try{ await saveAuto({channel: $('#ytChannel').value.trim(), autoEnabled: $('#autoEnabled').checked}, '저장했어요.'); }
   finally{ btn.disabled = false; }
 };
 
