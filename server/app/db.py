@@ -74,6 +74,25 @@ MIGRATIONS = [
     ALTER TABLE shorts ADD COLUMN transcript_status TEXT NOT NULL DEFAULT '';
     ALTER TABLE shorts ADD COLUMN transcript_error TEXT;
     """,
+    # 대본은 영상 하나에 하나다(같은 설교로 기획을 두 번 해도 대본은 한 벌). 쇼츠 표에서 따로 뺀다.
+    """
+    CREATE TABLE transcripts (
+      video_id TEXT PRIMARY KEY,
+      start_sec INTEGER NOT NULL DEFAULT 0,
+      end_sec INTEGER NOT NULL DEFAULT 0,
+      text TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT '' CHECK (status IN ('', 'running', 'done', 'error')),
+      error TEXT,
+      model TEXT NOT NULL DEFAULT '',
+      updated_at INTEGER NOT NULL DEFAULT 0
+    );
+    INSERT INTO transcripts (video_id, start_sec, end_sec, text, status, updated_at)
+      SELECT video_id, start_sec, end_sec, transcript, 'done', MAX(created_at)
+      FROM shorts WHERE transcript <> '' GROUP BY video_id;
+    ALTER TABLE shorts DROP COLUMN transcript;
+    ALTER TABLE shorts DROP COLUMN transcript_status;
+    ALTER TABLE shorts DROP COLUMN transcript_error;
+    """,
 ]
 
 

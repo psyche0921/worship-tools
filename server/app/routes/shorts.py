@@ -1,4 +1,4 @@
-"""쇼츠 기획: 작업 등록·확인, 팀 공용 기록.
+"""쇼츠 기획: 작업 등록·확인, 팀 공용 기록, 설교 대본(영상 하나에 하나).
 
 응답의 기록 항목은 v1의 hist.shorts 항목과 같은 모양이다(key, id=영상 ID, start, end, at, title,
 extra, text). 화면 코드(renderShorts, buildPdf)를 그대로 쓰기 위해서다.
@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 from ..auth import current_user, get_db, get_settings
 from ..config import Settings
 from ..db import get_setting, now_ms
-from ..jobs import kst_midnight_ms
+from ..jobs import claim_transcript, kst_midnight_ms
 
 router = APIRouter(prefix='/api')
 
@@ -30,14 +30,17 @@ def shorts_item(row: sqlite3.Row, user: dict, with_text: bool = False) -> dict:
         'canDelete': user['role'] == 'admin' or row['created_by'] == user['email'],
     }
     if with_text:
+        # 설교 대본은 영상 하나에 하나(transcripts 표)라서, 같은 영상의 다른 기획과 같은 대본을 본다.
         item['text'] = row['text']
-        item['transcript'] = row['transcript']
-        item['transcriptStatus'] = row['transcript_status']
+        item['transcript'] = row['transcript'] or ''
+        item['transcriptStatus'] = row['transcript_status'] or ''
         item['transcriptError'] = row['transcript_error']
     return item
 
 
-SHORTS_SELECT = 'SELECT s.*, u.name AS by_name FROM shorts s LEFT JOIN users u ON u.email = s.created_by'
+SHORTS_SELECT = ('SELECT s.*, u.name AS by_name, t.text AS transcript, t.status AS transcript_status, '
+                 't.error AS transcript_error FROM shorts s LEFT JOIN users u ON u.email = s.created_by '
+                 'LEFT JOIN transcripts t ON t.video_id = s.video_id')
 
 
 def load_shorts(db: sqlite3.Connection, shorts_id: int, user: dict) -> dict | None:
@@ -123,15 +126,12 @@ def get_shorts(shorts_id: int, user: dict = Depends(current_user), db: sqlite3.C
 async def make_transcript(shorts_id: int, request: Request, user: dict = Depends(current_user),
                     db: sqlite3.Connection = Depends(get_db)):
     """설교 대본을 (다시) 받아쓴다. 기획할 때 자동으로 만들지만, 실패했거나 예전 기록이면 여기서 만든다."""
-    row = db.execute('SELECT transcript_status FROM shorts WHERE id = ?', (shorts_id,)).fetchone()
+    row = db.execute('SELECT video_id, start_sec, end_sec FROM shorts WHERE id = ?', (shorts_id,)).fetchone()
     if not row:
         raise HTTPException(404, '기록을 찾을 수 없어요.')
-    if row['transcript_status'] == 'running':
+    if not claim_transcript(db, row['video_id'], row['start_sec'], row['end_sec'], force=True):
         raise HTTPException(409, '이미 설교 대본을 만들고 있어요.')
-    with db:
-        db.execute("UPDATE shorts SET transcript_status = 'running', transcript_error = NULL WHERE id = ?",
-                   (shorts_id,))
-    request.app.state.jobs.start_transcript(shorts_id)
+    request.app.state.jobs.start_transcript(row['video_id'], row['start_sec'], row['end_sec'])
     return {'transcriptStatus': 'running'}
 
 

@@ -26,12 +26,15 @@ def add_setlist(db, key, title, at, songs=('주의 은혜라', '여기에 모인
              raw, ADMIN, at))
 
 
-def add_shorts(db, title, at, text='## 쇼츠 1\n본문', sermon='', by=ADMIN, transcript=''):
+def add_shorts(db, title, at, text='## 쇼츠 1\n본문', sermon='', by=ADMIN, transcript='', video='re4fR9uW0Po'):
     with db:
         cur = db.execute(
             'INSERT INTO shorts (video_id, start_sec, end_sec, title, sermon_title, extra, text, created_by, '
-            "created_at, transcript) VALUES ('re4fR9uW0Po', 2334, 4800, ?, ?, '', ?, ?, ?, ?)",
-            (title, sermon, text, by, at, transcript))
+            "created_at) VALUES (?, 2334, 4800, ?, ?, '', ?, ?, ?)",
+            (video, title, sermon, text, by, at))
+        if transcript:  # 대본은 영상에 딸린다
+            db.execute("INSERT INTO transcripts (video_id, text, status, updated_at) VALUES (?, ?, 'done', ?)",
+                       (video, transcript, at))
     return cur.lastrowid
 
 
@@ -198,8 +201,8 @@ def test_search_is_case_insensitive(client, db):
 
 
 def test_has_transcript_flag(client, db):
-    a = add_shorts(db, '261115 쇼츠 기획', ms(2026, 11, 16), transcript='[0:40:12] 대본')
-    b = add_shorts(db, '261122 쇼츠 기획', ms(2026, 11, 23))
+    a = add_shorts(db, '261115 쇼츠 기획', ms(2026, 11, 16), transcript='[0:40:12] 대본', video='aaaaaaaaaaa')
+    b = add_shorts(db, '261122 쇼츠 기획', ms(2026, 11, 23), video='bbbbbbbbbbb')
     login(client, ADMIN)
     flags = {it['key']: it['hasTranscript'] for it in rows(client)}
     assert flags == {str(a): True, str(b): False}

@@ -90,7 +90,7 @@ YouTube Data API는 지금처럼 관리자 브라우저에서 직접 호출합�
 - 서버가 재시작되면 `running` 상태였던 작업은 `error`("서버가 재시작되어 중단됨")로 바꿉니다.
 - **사용량 제한**: 키가 서버에 하나뿐이라 사용자별로 하루 `plan` 작업 수를 제한합니다(기본 20회, 환경변수로 조정). 같은 사용자의 동시 작업은 1개까지만 허용합니다.
 - 프롬프트 구성(설교 구간 안내, 절대 시각 지시, 추가 요청)은 v1 문구를 서버로 옮깁니다. SKILL.md는 DB 설정에서 읽고 frontmatter를 제거합니다.
-- **설교 대본**: 기획이 끝나 작업을 `done`으로 바꾼 뒤, 같은 백그라운드 작업에서 같은 구간을 한 번 더 호출해 받아쓰고 `shorts.transcript`에 넣습니다. 기획 결과를 먼저 보여 주기 위해서입니다. 진행 상태는 `transcript_status`(''/running/done/error)에 두고, 서버가 재시작되면 `running`은 `error`로 바꿉니다. 한 번 기획에 Gemini를 두 번 부르는 셈입니다.
+- **설교 대본**: 기획이 끝나 작업을 `done`으로 바꾼 뒤, 같은 백그라운드 작업에서 같은 구간을 한 번 더 호출해 받아쓰고 `transcripts` 표에 넣습니다(기획 결과를 먼저 보여 주기 위해서). 대본은 영상 하나에 하나라서, 그 영상의 대본이 이미 있거나 만드는 중이면 건너뜁니다(`claim_transcript`가 한 번만 맡도록 보장). 진행 상태는 `transcripts.status`(''/running/done/error)에 두고, 서버가 재시작되면 `running`은 `error`로 바꿉니다.
 - 서버는 Gemini 응답 원문을 그대로 저장합니다. `#t=` 제거, 타임스탬프 링크, 시작 시각 보정은 v1처럼 화면에 그릴 때 처리합니다(같은 원문을 나중에 다시 그릴 수 있도록).
 
 ## 6. DB 스키마 (SQLite, WAL 모드)
@@ -104,8 +104,10 @@ settings (key TEXT PK, value TEXT, updated_at INT, updated_by TEXT)
           -- 'skill_md', 'model'
 shorts   (id INTEGER PK, video_id TEXT, start_sec INT, end_sec INT,
           title TEXT, sermon_title TEXT, extra TEXT, text TEXT, model TEXT,
-          created_by TEXT, created_at INT, legacy_key TEXT UNIQUE,
-          transcript TEXT, transcript_status TEXT, transcript_error TEXT)
+          created_by TEXT, created_at INT, legacy_key TEXT UNIQUE)
+transcripts (video_id TEXT PK, start_sec INT, end_sec INT, text TEXT,
+          status TEXT CHECK(status IN ('','running','done','error')), error TEXT,
+          model TEXT, updated_at INT)
 setlists (id INTEGER PK, playlist_id TEXT UNIQUE, title TEXT, url TEXT,
           ok INT, total INT, songs_json TEXT, raw_message TEXT,
           created_by TEXT, created_at INT)
@@ -116,6 +118,7 @@ jobs     (id TEXT PK, kind TEXT, status TEXT, input_json TEXT, result_json TEXT,
 - 시각은 모두 밀리초 epoch입니다(v1의 `at`과 같음).
 - `songs_json`은 v1 형식 그대로입니다: `[{id, name, notes[]}]`.
 - `raw_message`: 세트리스트 원본 메시지입니다. 나중에 다시 파싱할 수 있게 저장합니다(v1에는 없던 항목).
+- `transcripts`: **설교 대본은 영상 하나에 하나**입니다. 같은 영상으로 기획을 두 번 해도 대본은 한 벌만 만들고, 두 기록이 같은 대본을 봅니다(`shorts.video_id`로 이어 붙임).
 - `legacy_key`: v1 기록을 가져올 때 쓰는 키(`s{at}`)입니다. 같은 파일을 두 번 가져와도 중복되지 않습니다.
 - v1의 개수 제한(100/60)은 없애고, 목록 API에서 페이지를 나눠 돌려줍니다.
 
@@ -134,7 +137,7 @@ jobs     (id TEXT PK, kind TEXT, status TEXT, input_json TEXT, result_json TEXT,
 | `GET /api/jobs/{id}` | 본인 작업 | 상태와 결과 |
 | `GET /api/shorts?before=` | 로그인 | 목록(최신순, 20개씩). 원문 없이 메타만 |
 | `GET /api/shorts/{id}` | 로그인 | 원문 포함 |
-| `POST /api/shorts/{id}/transcript` | 로그인 | 설교 대본 다시 받아쓰기(기획할 때 자동으로 한 번 만든다). 이미 만들고 있으면 409 |
+| `POST /api/shorts/{id}/transcript` | 로그인 | 그 기록의 **영상** 대본 다시 받아쓰기(기획할 때 자동으로 한 번 만든다). 이미 만들고 있으면 409 |
 | `DELETE /api/shorts/{id}` | 만든 사람 · 관리자 | 삭제 |
 | `GET /api/records?kind=&q=&page=&size=` | 로그인 | 작업 기록 목록. 언제나 주일별로 묶어서 10주씩. `q`는 날짜(261115, 2026-11-15)와 키워드(곡 제목, 설교 주제, 쇼츠 본문, 설교 대본)를 모두 찾고 조각은 AND. **맞은 기록이 있는 주를 통째로** 돌려줘서, 찬양 제목으로 찾으면 그 주의 쇼츠 기획도 함께 나온다 |
 | `GET /api/records/setlist/{재생목록 ID}` | 로그인 | 세트리스트 상세(원본 메시지는 관리자에게만). 쇼츠 상세는 `/api/shorts/{id}` |

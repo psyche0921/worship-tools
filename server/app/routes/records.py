@@ -101,8 +101,9 @@ def _select(base: str, text_expr: str, toks: list[dict]) -> tuple[str, list]:
 
 SETLIST_SQL = 'SELECT playlist_id, title, url, ok, total, songs_json, created_at FROM setlists'
 SHORTS_SQL = ('SELECT s.id, s.video_id, s.start_sec, s.end_sec, s.title, s.sermon_title, s.created_by, '
-              "s.created_at, s.transcript <> '' AS has_transcript, u.name AS by_name "
-              'FROM shorts s LEFT JOIN users u ON u.email = s.created_by')
+              "s.created_at, COALESCE(t.text, '') <> '' AS has_transcript, u.name AS by_name "
+              'FROM shorts s LEFT JOIN users u ON u.email = s.created_by '
+              'LEFT JOIN transcripts t ON t.video_id = s.video_id')
 
 
 def _setlists(db: sqlite3.Connection, toks: list[dict], user: dict) -> list[dict]:
@@ -122,7 +123,8 @@ def _setlists(db: sqlite3.Connection, toks: list[dict], user: dict) -> list[dict
 
 
 def _shorts(db: sqlite3.Connection, toks: list[dict], user: dict) -> list[dict]:
-    text_expr = "s.title || ' ' || s.sermon_title || ' ' || s.extra || ' ' || s.text || ' ' || s.transcript"
+    text_expr = ("s.title || ' ' || s.sermon_title || ' ' || s.extra || ' ' || s.text "
+                 "|| ' ' || COALESCE(t.text, '')")
     sql, params = _select(SHORTS_SQL, text_expr, toks)
     out = []
     for r in db.execute(sql, params):

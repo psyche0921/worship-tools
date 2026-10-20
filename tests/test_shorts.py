@@ -224,19 +224,42 @@ def test_make_transcript_again(client, skill, fake_gemini, add_member):
     assert wait_transcript(client, key)['transcript'] == SCRIPT
 
 
+def test_transcript_is_one_per_video(client, skill, fake_gemini, db):
+    """같은 영상으로 두 번 기획해도 대본은 한 벌이다(두 기록이 같은 대본을 본다)."""
+    fake_gemini.replies = [PLAN_REPLY, SCRIPT, PLAN_REPLY]
+    login(client, ADMIN)
+    first = wait_job(client, plan(client).json()['jobId'])['shorts']['key']
+    wait_transcript(client, first)
+    second = wait_job(client, plan(client).json()['jobId'])['shorts']['key']
+    assert first != second
+
+    a, b = (client.get(f'/api/shorts/{k}').json() for k in (first, second))
+    assert a['transcript'] == b['transcript'] == SCRIPT
+    assert b['transcriptStatus'] == 'done'
+    assert db.execute('SELECT COUNT(*) FROM transcripts').fetchone()[0] == 1
+    assert len(fake_gemini.calls) == 3  # 기획 2번 + 대본 1번
+
+    # 다른 영상은 따로 만든다
+    fake_gemini.replies = [PLAN_REPLY, '[0:10:00] 다른 설교']
+    other = wait_job(client, plan(client, videoId='aaaaaaaaaaa').json()['jobId'])['shorts']['key']
+    assert wait_transcript(client, other)['transcript'] == '[0:10:00] 다른 설교'
+    assert db.execute('SELECT COUNT(*) FROM transcripts').fetchone()[0] == 2
+
+
 def test_make_transcript_requires_record_and_login(client):
     assert client.post('/api/shorts/9999/transcript').status_code == 401
     login(client, ADMIN)
     assert client.post('/api/shorts/9999/transcript').status_code == 404
 
 
-def test_transcript_not_run_twice(client, skill, fake_gemini, db):
+def test_transcript_not_run_twice(client, skill, db):
     login(client, ADMIN)
     with db:
-        db.execute("INSERT INTO shorts (video_id, text, created_by, created_at, transcript_status) "
-                   "VALUES (?, 't', ?, ?, 'running')", (VID, ADMIN, now_ms()))
-        shorts_id = db.execute('SELECT MAX(id) FROM shorts').fetchone()[0]
-    r = client.post(f'/api/shorts/{shorts_id}/transcript')
+        cur = db.execute("INSERT INTO shorts (video_id, text, created_by, created_at) VALUES (?, 't', ?, ?)",
+                         (VID, ADMIN, now_ms()))
+        db.execute("INSERT INTO transcripts (video_id, status, updated_at) VALUES (?, 'running', ?)",
+                   (VID, now_ms()))
+    r = client.post(f'/api/shorts/{cur.lastrowid}/transcript')
     assert r.status_code == 409 and '이미' in r.json()['detail']
 
 
@@ -244,12 +267,12 @@ def test_restart_marks_running_transcript(settings, app, client, db):
     from fastapi.testclient import TestClient
 
     with db:
-        db.execute("INSERT INTO shorts (video_id, text, created_by, created_at, transcript_status) "
-                   "VALUES (?, 't', ?, ?, 'running')", (VID, ADMIN, now_ms()))
+        db.execute("INSERT INTO transcripts (video_id, status, updated_at) VALUES (?, 'running', ?)",
+                   (VID, now_ms()))
     with TestClient(app, base_url=settings.public_origin):
         pass
-    row = db.execute('SELECT transcript_status, transcript_error FROM shorts').fetchone()
-    assert row['transcript_status'] == 'error' and '재시작' in row['transcript_error']
+    row = db.execute('SELECT status, error FROM transcripts').fetchone()
+    assert row['status'] == 'error' and '재시작' in row['error']
 
 
 # ---------- 작업: 설교 구간 찾기 ----------
