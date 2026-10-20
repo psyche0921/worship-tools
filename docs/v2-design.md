@@ -145,7 +145,7 @@ jobs     (id TEXT PK, kind TEXT, status TEXT, input_json TEXT, result_json TEXT,
 | `POST /api/setlists` | 관리자 | 재생목록을 만든 뒤 결과 저장(원본 메시지 포함) |
 | `DELETE /api/setlists/{재생목록 ID}` | 관리자 | 기록 삭제(YouTube 재생목록은 지우지 않음) |
 | `GET/PUT /api/settings` | 관리자 | SKILL.md, 모델, 자동 기획(켜기·채널·마지막 실행 결과) |
-| `POST /api/auto/run` | 관리자 | 자동 기획을 지금 한 번 실행(월요일을 기다리지 않고) |
+| `POST /api/auto/run` | 관리자 | 자동 기획을 지금 한 번 실행(월요일을 기다리지 않고). 백그라운드로 돌리고 바로 응답하며, 진행 상황은 `GET /api/settings`의 `autoLast`로 본다 |
 | `GET/POST/DELETE /api/members` | 관리자 | 허용 이메일 관리(관리자 자신은 삭제 불가) |
 
 ## 8. 화면 변경

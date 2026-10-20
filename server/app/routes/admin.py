@@ -145,8 +145,11 @@ def write_settings(body: SettingsIn, user: dict = Depends(require_admin),
 
 @router.post('/auto/run')
 async def run_auto(request: Request, db: sqlite3.Connection = Depends(get_db)):
-    """'지금 한 번 실행'. 월요일을 기다리지 않고 지난 주일 영상으로 바로 돌린다."""
-    return await request.app.state.auto.run_once(db, force=True)
+    """'지금 한 번 실행'. 2~4분 걸리므로 백그라운드로 돌리고 상태만 돌려준다.
+
+    진행 상황은 GET /api/settings의 autoLast로 확인한다(요청을 붙들고 있으면 504가 난다).
+    """
+    return request.app.state.auto.start_now(db)
 
 
 # ---------- 팀원 ----------

@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from . import auth, gemini, youtube
 from .config import Settings
 from .db import connect, init_db, seed_admins
-from .auto import AutoRunner, seed_auto_user
+from .auto import AutoRunner, clear_running, seed_auto_user
 from .jobs import JobRunner, mark_interrupted
 from .routes import admin, records, shorts
 
@@ -37,6 +37,7 @@ def create_app(settings: Settings | None = None,
             seed_admins(conn, settings.admin_emails)
             seed_auto_user(conn)
             mark_interrupted(conn)
+            clear_running(conn)
         finally:
             conn.close()
         app.state.auto.start()

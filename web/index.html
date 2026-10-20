@@ -1521,7 +1521,8 @@ function twoStep(btn, label, fn){
   };
 }
 
-const AUTO_LABEL = {done: '기획 완료', skip: '이미 기획한 영상', none: '영상 없음', error: '실패', off: '꺼져 있음'};
+const AUTO_LABEL = {running: '진행 중', done: '기획 완료', skip: '이미 기획한 영상',
+                    none: '영상 없음', error: '실패', off: '꺼져 있음'};
 
 function fillSettings(st){
   $('#skillText').value = st.skill;
@@ -1588,16 +1589,32 @@ $('#saveAuto').onclick = async e => {
   finally{ btn.disabled = false; }
 };
 
+// 오래 걸려서 서버가 백그라운드로 돌린다. 끝날 때까지 설정을 다시 읽어 확인한다.
+const AUTO_DEADLINE = 15 * 60 * 1000;
+async function watchAuto(msg){
+  const t0 = Date.now();
+  while(Date.now() - t0 < AUTO_DEADLINE){
+    await sleep(5000);
+    let st;
+    try{ st = await api('/api/settings'); }
+    catch(e){ if(e.network) continue; throw e; }
+    fillSettings(st);
+    const last = st.autoLast || {};
+    if(last.status !== 'running') return last;
+  }
+  throw new Error('너무 오래 걸려요. 잠시 뒤 설정 화면을 다시 열어 확인해 주세요.');
+}
+
 $('#runAuto').onclick = async e => {
   const btn = e.currentTarget, msg = $('#autoMsg');
   btn.disabled = true;
-  const stop = withTimer(msg, '지난 주일 영상으로 기획하는 중… (2~4분 걸려요)');
+  const stop = withTimer(msg, '지난 주일 영상으로 기획하는 중… (2~4분 걸려요. 화면을 닫아도 서버가 계속 해요)');
   try{
-    const r = await api('/api/auto/run', {method: 'POST'});
+    await api('/api/auto/run', {method: 'POST'});
+    const r = await watchAuto(msg);
     stop();
     msg.className = r.status === 'done' || r.status === 'skip' ? 'msg' : 'msg err';
     msg.textContent = `${AUTO_LABEL[r.status] || r.status}: ${r.message || ''}`;
-    fillSettings(await api('/api/settings'));
     records.invalidate();
   }catch(err){ stop(); msg.className = 'msg err'; msg.textContent = err.message; }
   finally{ btn.disabled = false; }

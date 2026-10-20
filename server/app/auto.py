@@ -24,6 +24,7 @@ RUN_WEEKDAY = 0      # 월요일
 RUN_HOUR = 13        # 오후 1시
 RETRY_UNTIL = 18     # 못 찾으면 저녁 6시까지 다시 본다
 RETRY_MINUTES = 30
+STALE_MINUTES = 20   # 이보다 오래 'running'이면 멈춘 것으로 본다
 TICK_SECONDS = 300
 
 
@@ -48,9 +49,18 @@ def _save(conn, status: str, message: str, **extra) -> dict:
     return out
 
 
+def clear_running(conn) -> None:
+    """서버가 재시작되면 돌고 있던 자동 실행은 끊긴 것이다."""
+    if last_run(conn).get('status') == 'running':
+        _save(conn, 'error', '서버가 재시작되어 중단됐어요. 다시 시도해 주세요.',
+              week=datetime.now(KST).date().isoformat())
+
+
 def due(now: datetime, last: dict) -> bool:
     """지금 돌려야 하나. 월요일 13~18시 사이, 이번 주에 아직 끝내지 않았으면."""
     if now.weekday() != RUN_WEEKDAY or not (RUN_HOUR <= now.hour < RETRY_UNTIL):
+        return False
+    if last.get('status') == 'running' and now.timestamp() * 1000 - int(last.get('at') or 0) < STALE_MINUTES * 60_000:
         return False
     if last.get('week') == now.date().isoformat():
         if last.get('status') in ('done', 'skip', 'off'):
@@ -66,6 +76,24 @@ class AutoRunner:
         self.app = app
         self.task: asyncio.Task | None = None
         self.running = False
+
+    def start_now(self, conn) -> dict:
+        """'지금 한 번 실행'. 2~4분 걸려서 백그라운드로 돌리고 상태만 바로 돌려준다.
+
+        진행 상황은 settings의 auto_last('running')에 남고, 화면은 그걸 확인한다.
+        """
+        if self.running or last_run(conn).get('status') == 'running':
+            return last_run(conn) or {'status': 'running', 'message': '이미 돌고 있어요.'}
+        out = _save(conn, 'running', '지난 주일 영상을 찾는 중이에요…', week=self._week())
+        self.app.state.jobs._spawn(self._run_bg())
+        return out
+
+    async def _run_bg(self) -> None:
+        conn = connect(self.app.state.settings.db_path)
+        try:
+            await self.run_once(conn, force=True)
+        finally:
+            conn.close()
 
     def start(self) -> None:
         self.task = asyncio.create_task(self._loop())

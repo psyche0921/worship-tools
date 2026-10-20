@@ -169,15 +169,25 @@ def ready(auto_client, settings):
     conn.close()
 
 
-def run_now(client):
+def run_now(client, conn, timeout=5.0):
+    """'지금 한 번 실행'은 바로 돌아오고(504 방지), 결과는 auto_last로 확인한다."""
+    import time
     login(client, ADMIN)
-    return client.post('/api/auto/run').json()
+    started = client.post('/api/auto/run').json()
+    assert started['status'] == 'running', started
+    end = time.time() + timeout
+    while time.time() < end:
+        last = client.get('/api/settings').json()['autoLast']
+        if last.get('status') != 'running':
+            return last
+        time.sleep(0.02)
+    raise AssertionError(f'끝나지 않음: {last}')
 
 
-def test_run_makes_a_plan(auto_client, ready, fake_gemini, monkeypatch):
+def test_run_makes_a_plan(auto_client, ready, fake_gemini):
     fake_gemini.replies = ['{"start":"0:33:41","end":"1:03:47","title":"너희 안에 이 사고방식을 품으라"}',
                            PLAN_REPLY, '[0:33:41] 함께 봉독합니다.']
-    r = run_now(auto_client)
+    r = run_now(auto_client, ready)
     assert r['status'] == 'done', r
     assert r['videoId'] == VIDEO and r['shortsId']
 
@@ -240,6 +250,22 @@ def test_off_unless_enabled(auto_client, ready):
 
 
 # ---------- 설정 API ----------
+
+def test_run_does_not_hold_the_request(auto_client, ready, fake_gemini):
+    """요청을 붙들고 있으면 nginx에서 504가 난다. 바로 돌아와야 한다."""
+    login(auto_client, ADMIN)
+    first = auto_client.post('/api/auto/run').json()
+    assert first['status'] == 'running' and '찾는 중' in first['message']
+    assert auto_client.post('/api/auto/run').json()['status'] == 'running'  # 두 번 눌러도 하나만
+
+
+def test_restart_clears_running(settings, auto_app, auto_client, ready):
+    from fastapi.testclient import TestClient
+    from app.auto import clear_running, _save
+    _save(ready, 'running', '…', week='2026-10-19')
+    clear_running(ready)
+    assert last_run(ready)['status'] == 'error' and '재시작' in last_run(ready)['message']
+
 
 def test_settings_and_run_are_admin_only(client, add_member):
     add_member()
