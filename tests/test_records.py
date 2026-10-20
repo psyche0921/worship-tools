@@ -152,7 +152,8 @@ def test_kind_filter(client, db):
 def test_empty(client):
     login(client, ADMIN)
     assert listing(client) == {'page': 1, 'pages': 1, 'total': 0, 'weeks': 0,
-                               'counts': {'setlist': 0, 'shorts': 0}, 'groups': []}
+                               'counts': {'setlist': 0, 'shorts': 0},
+                               'matched': 0, 'matches': [], 'groups': []}
 
 
 # ---------- 검색 ----------
@@ -192,6 +193,46 @@ def test_search_by_keyword_and_date(client, db):
     assert len(keys(client, q='2026')) == 3
     assert keys(client, q='261129 광야') == [str(sid)]       # 조각은 모두 맞아야 한다(AND)
     assert keys(client, q='없는말') == []
+
+
+def test_search_tells_why_it_matched(client, db):
+    """검색된 이유: 어느 칸에서 맞았는지와 그 주변 문구."""
+    add_setlist(db, PID, 'Setlist 261115', ms(2026, 11, 11), songs=('광야를 지나며', '주의 은혜라'))
+    sid = add_shorts(db, '261122 쇼츠 기획 · 광야', ms(2026, 11, 23), sermon='광야에서 배우는 순종',
+                     text='## 쇼츠 1\n믿음은 광야에서 자랍니다. 거기서 하나님을 만납니다.',
+                     transcript='[0:40:12] 이스라엘은 광야 사십 년을 걸었습니다.')
+    login(client, ADMIN)
+
+    r = listing(client, q='광야')
+    assert r['matched'] == 2
+    by_key = {m['key']: m for m in r['matches']}
+    assert by_key[PID]['where'] == [{'field': '곡 제목', 'token': '광야', 'text': '광야를 지나며 / 주의 은혜라'}]
+    w = by_key[str(sid)]['where'][0]
+    assert w['field'] == '제목' and by_key[str(sid)]['dateLabel'].startswith('26.11.22')
+
+    # 제목·주제에 없고 본문에만 있으면 본문에서 찾았다고 알려 준다
+    r = listing(client, q='자랍니다')
+    assert [(m['key'], m['where'][0]['field']) for m in r['matches']] == [(str(sid), '쇼츠 본문')]
+    assert '믿음은 광야에서 자랍니다' in r['matches'][0]['where'][0]['text']
+
+    r = listing(client, q='사십')
+    assert r['matches'][0]['where'][0]['field'] == '설교 대본'
+    assert '광야 사십 년을' in r['matches'][0]['where'][0]['text']
+
+    # 제목에 그대로 있으면 제목에서 찾았다고 한다
+    r = listing(client, q='261115')
+    assert r['matches'][0]['where'] == [{'field': '제목', 'token': '261115', 'text': 'Setlist 261115'}]
+    # 제목에 없는 날짜 모양이면 날짜로 맞췄다고 알려 준다
+    r = listing(client, q='2026-11-15')
+    assert r['matches'][0]['where'] == [{'field': '날짜', 'token': '2026-11-15', 'text': '26.11.15(일)'}]
+
+    # 조각마다 한 줄씩(조각이 서로 다른 칸에서 맞을 수 있다)
+    r = listing(client, q='자랍니다 2026-11-22')
+    assert [w['field'] for w in r['matches'][0]['where']] == ['쇼츠 본문', '날짜']
+
+    # 같은 주라서 함께 나온 기록은 이유 목록에 넣지 않는다
+    assert listing(client, q='주의 은혜라')['matched'] == 1
+    assert not listing(client)['matches']
 
 
 def test_search_is_case_insensitive(client, db):

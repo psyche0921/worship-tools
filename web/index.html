@@ -106,6 +106,9 @@ button.confirm{background:var(--err)!important;color:#fff!important;border-color
 .mrow button{flex:none;padding:6px 12px;font-size:.82rem}
 .warn{color:var(--warn);font-size:.85rem;margin:0 0 8px}
 .rec-hint{font-size:.8rem;color:var(--muted);margin:10px 0 0}
+#recWhyList .hm{white-space:normal;word-break:break-word}
+#recWhyList .hm b{color:var(--text);font-weight:600}
+#recWhyList mark{background:rgba(214,54,47,.18);color:inherit;border-radius:3px;padding:0 1px}
 .md.script{font-size:.88rem;color:var(--text)}
 .md.script p{margin:.45em 0}
 .filters{display:flex;gap:8px;margin-top:10px}
@@ -194,6 +197,12 @@ button.confirm{background:var(--err)!important;color:#fff!important;border-color
         </select>
       </div>
       <p class="rec-hint">주일 예배 기준으로 묶어서 보여 줘요. 찬양 제목으로 찾으면 그 주에 기획한 쇼츠도 함께 나와요.</p>
+    </div>
+
+    <div class="card" id="recWhy" hidden>
+      <div class="rec-head"><span class="vh-title">검색된 이유</span><span class="count" id="recWhyCount"></span></div>
+      <div id="recWhyList"></div>
+      <p class="rec-hint">여기 나온 기록이 검색어와 맞았고, 목록에는 그 기록이 속한 주가 통째로 나와요.</p>
     </div>
 
     <div class="card">
@@ -1306,6 +1315,7 @@ const records = {
     }catch(e){
       box.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
       $('#recPager').hidden = true;
+      $('#recWhy').hidden = true;
       $('#recCount').textContent = '';
     }
   },
@@ -1335,9 +1345,35 @@ function recordRow(it){
     </div>`;
 }
 
+// 검색된 이유: 어느 칸에서 맞았는지와 그 주변 문구
+function markToken(text, token){
+  const i = String(text).toLowerCase().indexOf(String(token).toLowerCase());
+  if(i < 0) return esc(text);
+  return esc(text.slice(0, i)) + '<mark>' + esc(text.slice(i, i + token.length)) + '</mark>'
+    + esc(text.slice(i + token.length));
+}
+
+function renderWhy(d){
+  const box = $('#recWhy');
+  if(!records.q || !d.matches || !d.matches.length){ box.hidden = true; return; }
+  box.hidden = false;
+  $('#recWhyCount').textContent = `${d.matched}건${d.matched >= 30 ? '+' : ''}`;
+  $('#recWhyList').innerHTML = d.matches.map(m => `
+    <div class="hrow" data-kind="${m.kind}" data-key="${esc(m.key)}">
+      <button class="hopen">
+        <span class="ht"><span class="kind k-${m.kind}">${KIND_LABEL[m.kind]}</span>${esc(m.title || '(제목 없음)')}</span>
+        ${m.where.map(w => `<span class="hm"><b>${esc(w.field)}</b>: ${markToken(w.text, w.token)}</span>`).join('')}
+      </button>
+    </div>`).join('');
+  $('#recWhyList').querySelectorAll('.hrow').forEach(row => {
+    row.querySelector('.hopen').onclick = () => openRecord(row.dataset.kind, row.dataset.key);
+  });
+}
+
 function renderRecords(d){
   const box = $('#recList');
   records.page = d.page; records.pages = d.pages;
+  renderWhy(d);
   $('#recCount').textContent = d.total
     ? `${d.weeks}주 · 세트리스트 ${d.counts.setlist} · 쇼츠 기획 ${d.counts.shorts}` : '';
   if(!d.total){

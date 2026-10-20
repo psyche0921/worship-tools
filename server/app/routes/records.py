@@ -19,6 +19,7 @@ router = APIRouter(prefix='/api/records')
 
 PAGE_SIZE = 10
 MAX_TOKENS = 6
+MAX_MATCHES = 30  # '검색된 이유'에 보여 줄 기록 수
 YYMMDD = re.compile(r'(?<!\d)(\d{6})(?!\d)')
 DATEISH = re.compile(r'^[\d.\-/]{4,10}$')
 WEEKDAY_KO = '월화수목금토일'
@@ -78,29 +79,56 @@ def _tokens(q: str) -> list[dict]:
     return out
 
 
-def _matches(toks: list[dict], hay: str, dates: dict, text_hits: list[bool]) -> bool:
-    """모든 조각이 맞아야 한다(제목·내용 어디든, 또는 날짜)."""
-    hay = hay.lower()
+def _snippet(text: str, token: str, width: int = 44) -> str:
+    """맞은 자리 앞뒤를 잘라서 '왜 걸렸는지' 보여 줄 짧은 문구를 만든다."""
+    text = ' '.join(str(text).split())
+    i = text.lower().find(token)
+    if i < 0:
+        return text[:width * 2]
+    a, b = max(0, i - width // 2), min(len(text), i + len(token) + width)
+    return ('…' if a else '') + text[a:b] + ('…' if b < len(text) else '')
+
+
+def _match_where(toks: list[dict], fields: list[tuple[str, str]], big: list[tuple[str, bool]],
+                 dates: dict) -> list[dict] | None:
+    """모든 조각이 맞아야 한다. 맞았으면 조각마다 '어느 칸에서' 맞았는지 돌려준다.
+
+    fields는 바로 볼 수 있는 짧은 칸, big은 SQL로 포함 여부만 본 큰 칸(본문·대본)이다.
+    """
     keys = [dates['date'].replace('-', ''), dates['week'].replace('-', '')]
+    where = []
     for i, tok in enumerate(toks):
-        if tok['t'] in hay or text_hits[i]:
-            continue
-        if tok['digits'] and any(tok['digits'] in k for k in keys):
-            continue
-        return False
-    return True
+        for label, value in fields:
+            if value and tok['t'] in value.lower():
+                where.append({'field': label, 'token': tok['t'], 'text': _snippet(value, tok['t'])})
+                break
+        else:
+            for label, hit in big:
+                if hit[i] if isinstance(hit, list) else hit:
+                    where.append({'field': label, 'token': tok['t'], 'text': ''})
+                    break
+            else:
+                if tok['digits'] and any(tok['digits'] in k for k in keys):
+                    where.append({'field': '날짜', 'token': tok['t'], 'text': dates['dateLabel']})
+                    continue
+                return None
+    return where
 
 
-def _select(base: str, text_expr: str, toks: list[dict]) -> tuple[str, list]:
-    """본문처럼 큰 칸은 가져오지 않고, 검색어가 들어 있는지만 SQL에서 확인한다."""
-    cols = ''.join(f', instr(lower({text_expr}), ?) AS kw{i}' for i in range(len(toks)))
-    return base.replace(' FROM ', cols + ' FROM ', 1), [t['t'] for t in toks]
+def _select(base: str, text_exprs: list[str], toks: list[dict]) -> tuple[str, list]:
+    """본문처럼 큰 칸은 가져오지 않고, 검색어가 들어 있는지만 SQL에서 칸마다 확인한다."""
+    cols, params = '', []
+    for j, expr in enumerate(text_exprs):
+        for i, tok in enumerate(toks):
+            cols += f', instr(lower({expr}), ?) AS kw{j}_{i}'
+            params.append(tok['t'])
+    return base.replace(' FROM ', cols + ' FROM ', 1), params
 
 
 # ---------- 목록 ----------
 
 SETLIST_SQL = 'SELECT playlist_id, title, url, ok, total, songs_json, created_at FROM setlists'
-SHORTS_SQL = ('SELECT s.id, s.video_id, s.start_sec, s.end_sec, s.title, s.sermon_title, s.created_by, '
+SHORTS_SQL = ('SELECT s.id, s.video_id, s.start_sec, s.end_sec, s.title, s.sermon_title, s.extra, s.created_by, '
               "s.created_at, COALESCE(t.text, '') <> '' AS has_transcript, u.name AS by_name "
               'FROM shorts s LEFT JOIN users u ON u.email = s.created_by '
               'LEFT JOIN transcripts t ON t.video_id = s.video_id')
@@ -108,36 +136,59 @@ SHORTS_SQL = ('SELECT s.id, s.video_id, s.start_sec, s.end_sec, s.title, s.sermo
 
 def _setlists(db: sqlite3.Connection, toks: list[dict], user: dict) -> list[dict]:
     # 원본 메시지(raw_message)는 한 메시지에 여러 세트리스트가 들어 있어서 검색에서 뺀다.
-    sql, params = _select(SETLIST_SQL, "title || ' ' || songs_json", toks)
     out = []
-    for r in db.execute(sql, params):
-        songs = [s.get('name') or '' for s in json.loads(r['songs_json'])]
+    for r in db.execute(SETLIST_SQL):
+        songs = json.loads(r['songs_json'])
+        names = [s.get('name') or '' for s in songs]
+        notes = [n for s in songs for n in (s.get('notes') or [])]
         dates = _dates('setlist', r['title'], r['created_at'])
-        hits = [bool(r[f'kw{i}']) for i in range(len(toks))]
         out.append({'kind': 'setlist', 'key': r['playlist_id'], 'title': r['title'], 'url': r['url'],
                     'at': r['created_at'], 'ok': r['ok'], 'total': r['total'],
-                    'songs': [s for s in songs if s][:30],
+                    'songs': [s for s in names if s][:30],
                     'canDelete': user['role'] == 'admin', **dates,
-                    '_hit': _matches(toks, r['title'] + ' ' + ' '.join(songs), dates, hits)})
+                    '_where': _match_where(toks, [('제목', r['title']), ('곡 제목', ' / '.join(names)),
+                                                  ('곡 메모', ' / '.join(notes))], [], dates)})
     return out
 
 
 def _shorts(db: sqlite3.Connection, toks: list[dict], user: dict) -> list[dict]:
-    text_expr = ("s.title || ' ' || s.sermon_title || ' ' || s.extra || ' ' || s.text "
-                 "|| ' ' || COALESCE(t.text, '')")
-    sql, params = _select(SHORTS_SQL, text_expr, toks)
+    # 쇼츠 본문과 설교 대본은 커서 SQL로 포함 여부만 본다(주변 문구는 걸린 기록만 따로 읽는다).
+    sql, params = _select(SHORTS_SQL, ['s.text', "COALESCE(t.text, '')"], toks)
     out = []
     for r in db.execute(sql, params):
         dates = _dates('shorts', r['title'], r['created_at'])
         topic = r['sermon_title'] or (r['title'].split('·', 1)[1].strip() if '·' in r['title'] else '')
-        hits = [bool(r[f'kw{i}']) for i in range(len(toks))]
+        big = [('쇼츠 본문', [bool(r[f'kw0_{i}']) for i in range(len(toks))]),
+               ('설교 대본', [bool(r[f'kw1_{i}']) for i in range(len(toks))])]
         out.append({'kind': 'shorts', 'key': str(r['id']), 'id': r['video_id'], 'title': r['title'],
                     'at': r['created_at'], 'start': r['start_sec'], 'end': r['end_sec'], 'topic': topic,
                     'by': r['created_by'], 'byName': r['by_name'] or r['created_by'].split('@')[0],
                     'hasTranscript': bool(r['has_transcript']),
                     'canDelete': user['role'] == 'admin' or r['created_by'] == user['email'], **dates,
-                    '_hit': _matches(toks, r['title'] + ' ' + topic, dates, hits)})
+                    '_where': _match_where(toks, [('제목', r['title']), ('설교 주제', topic),
+                                                  ('추가 요청', r['extra'])], big, dates)})
     return out
+
+
+BIG_FIELDS = {'쇼츠 본문': 'text', '설교 대본': 'transcript'}
+
+
+def fill_snippets(db: sqlite3.Connection, items: list[dict]) -> None:
+    """본문·대본에서 걸린 기록만 그 글을 읽어서 주변 문구를 채운다."""
+    need = [it for it in items
+            if it['kind'] == 'shorts' and any(w['field'] in BIG_FIELDS and not w['text'] for w in it['_where'])]
+    if not need:
+        return
+    ids = [int(it['key']) for it in need]
+    marks = ','.join('?' * len(ids))
+    texts = {r['id']: r for r in db.execute(
+        f"SELECT s.id, s.text, COALESCE(t.text, '') AS transcript FROM shorts s "
+        f'LEFT JOIN transcripts t ON t.video_id = s.video_id WHERE s.id IN ({marks})', ids)}
+    for it in need:
+        row = texts.get(int(it['key']))
+        for w in it['_where']:
+            if row is not None and w['field'] in BIG_FIELDS and not w['text']:
+                w['text'] = _snippet(row[BIG_FIELDS[w['field']]], w['token'])
 
 
 @router.get('')
@@ -154,11 +205,18 @@ def list_records(kind: str = Query('all', pattern='^(all|setlist|shorts)$'), q: 
         items += _setlists(db, toks, user)
     if kind in ('all', 'shorts'):
         items += _shorts(db, toks, user)
+    matches = []
     if toks:
-        weeks = {it['week'] for it in items if it['_hit']}
+        hit = [it for it in items if it['_where'] is not None]
+        weeks = {it['week'] for it in hit}
         items = [it for it in items if it['week'] in weeks]
+        fill_snippets(db, hit)
+        hit.sort(key=lambda it: (it['date'], it['at']), reverse=True)
+        # 왜 걸렸는지: 맞은 기록과 그 자리를 따로 모아서 돌려준다(같은 주라서 함께 나온 기록은 빼고).
+        matches = [{'kind': it['kind'], 'key': it['key'], 'title': it['title'], 'week': it['week'],
+                    'dateLabel': it['dateLabel'], 'where': it['_where']} for it in hit[:MAX_MATCHES]]
     for it in items:
-        del it['_hit']
+        del it['_where']
     items.sort(key=lambda it: (it['date'], it['at']), reverse=True)
 
     groups: dict[str, dict] = {}
@@ -175,6 +233,7 @@ def list_records(kind: str = Query('all', pattern='^(all|setlist|shorts)$'), q: 
     return {'page': page, 'pages': pages, 'total': len(items), 'weeks': len(rows),
             'counts': {'setlist': sum(1 for it in items if it['kind'] == 'setlist'),
                        'shorts': sum(1 for it in items if it['kind'] == 'shorts')},
+            'matched': len(matches), 'matches': matches,
             'groups': rows[(page - 1) * size: page * size]}
 
 

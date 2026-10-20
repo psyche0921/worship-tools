@@ -271,11 +271,28 @@ def main():
         hit = pg.locator('#recList .wk', has=pg.locator('.kind.k-shorts')).first
         assert hit.locator('.kind').all_inner_texts() == ['세트리스트', '쇼츠 기획']
 
+        # 검색된 이유: 곡 제목에서 맞았다고 알려 주고, 맞은 기록만 모아 보여 준다
+        assert pg.is_visible('#recWhy')
+        why = pg.locator('#recWhyList .hrow')
+        assert why.count() == 11 and set(pg.locator('#recWhyList .kind').all_inner_texts()) == {'세트리스트'}
+        assert '곡 제목' in why.first.inner_text()
+        assert pg.locator('#recWhyList mark').first.inner_text() == '씨앗'  # 조각마다 표시
+
         # 주제 키워드로 검색 → 쇼츠 기획 상세 (본문까지 찾는다)
         pg.fill('#recQ', '두려움')
         pg.click('#recSearch')
         pg.wait_for_function("document.querySelectorAll('#recList .wk').length === 1")
         assert set(pg.locator('#recList .kind').all_inner_texts()) == {'세트리스트', '쇼츠 기획'}
+        assert pg.locator('#recWhyList .hrow').count() == 1  # 같은 주 세트리스트는 이유 목록에 없다
+        assert '제목' in pg.inner_text('#recWhyList')
+        pg.fill('#recQ', '감사의 고백')   # 제목에는 없고 쇼츠 본문에만 있는 말
+        pg.click('#recSearch')
+        pg.wait_for_function("document.querySelector('#recWhyList').textContent.includes('쇼츠 본문')")
+        assert pg.locator('#recWhyList .hrow').count() == 1
+
+        pg.fill('#recQ', '두려움')
+        pg.click('#recSearch')
+        pg.wait_for_function("document.querySelectorAll('#recList .wk').length === 1")
         pg.locator('#recList .hrow[data-kind=shorts] .hopen').click()
         pg.wait_for_selector('#recordView .md')
         assert '#t=' not in pg.inner_html('#recordView')
