@@ -20,6 +20,7 @@ router = APIRouter(prefix='/api/records')
 PAGE_SIZE = 10
 MAX_TOKENS = 6
 MAX_MATCHES = 30  # '검색된 이유'에 보여 줄 기록 수
+MAX_WHERE = 3     # 한 조각이 여러 칸에서 맞았을 때 보여 줄 칸 수
 YYMMDD = re.compile(r'(?<!\d)(\d{6})(?!\d)')
 DATEISH = re.compile(r'^[\d.\-/]{4,10}$')
 WEEKDAY_KO = '월화수목금토일'
@@ -94,24 +95,23 @@ def _match_where(toks: list[dict], fields: list[tuple[str, str]], big: list[tupl
     """모든 조각이 맞아야 한다. 맞았으면 조각마다 '어느 칸에서' 맞았는지 돌려준다.
 
     fields는 바로 볼 수 있는 짧은 칸, big은 SQL로 포함 여부만 본 큰 칸(본문·대본)이다.
+    한 조각이 여러 칸에서 맞으면 모두 적는다(제목에도 있고 대본에도 있으면 둘 다).
     """
     keys = [dates['date'].replace('-', ''), dates['week'].replace('-', '')]
     where = []
     for i, tok in enumerate(toks):
+        found = []
         for label, value in fields:
             if value and tok['t'] in value.lower():
-                where.append({'field': label, 'token': tok['t'], 'text': _snippet(value, tok['t'])})
-                break
-        else:
-            for label, hit in big:
-                if hit[i] if isinstance(hit, list) else hit:
-                    where.append({'field': label, 'token': tok['t'], 'text': ''})
-                    break
-            else:
-                if tok['digits'] and any(tok['digits'] in k for k in keys):
-                    where.append({'field': '날짜', 'token': tok['t'], 'text': dates['dateLabel']})
-                    continue
-                return None
+                found.append({'field': label, 'token': tok['t'], 'text': _snippet(value, tok['t'])})
+        for label, hits in big:
+            if hits[i]:
+                found.append({'field': label, 'token': tok['t'], 'text': ''})
+        if tok['digits'] and any(tok['digits'] in k for k in keys):
+            found.append({'field': '날짜', 'token': tok['t'], 'text': dates['dateLabel']})
+        if not found:
+            return None  # 조각 하나라도 못 찾으면 이 기록은 아니다
+        where += found[:MAX_WHERE]
     return where
 
 

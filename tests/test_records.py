@@ -212,16 +212,17 @@ def test_search_tells_why_it_matched(client, db):
 
     # 제목·주제에 없고 본문에만 있으면 본문에서 찾았다고 알려 준다
     r = listing(client, q='자랍니다')
-    assert [(m['key'], m['where'][0]['field']) for m in r['matches']] == [(str(sid), '쇼츠 본문')]
+    assert [(m['key'], [w['field'] for w in m['where']]) for m in r['matches']] == [(str(sid), ['쇼츠 본문'])]
     assert '믿음은 광야에서 자랍니다' in r['matches'][0]['where'][0]['text']
 
     r = listing(client, q='사십')
     assert r['matches'][0]['where'][0]['field'] == '설교 대본'
     assert '광야 사십 년을' in r['matches'][0]['where'][0]['text']
 
-    # 제목에 그대로 있으면 제목에서 찾았다고 한다
+    # 한 조각이 여러 칸에서 맞으면 모두 적는다(제목에도 있고 날짜로도 맞음)
     r = listing(client, q='261115')
-    assert r['matches'][0]['where'] == [{'field': '제목', 'token': '261115', 'text': 'Setlist 261115'}]
+    assert r['matches'][0]['where'] == [{'field': '제목', 'token': '261115', 'text': 'Setlist 261115'},
+                                        {'field': '날짜', 'token': '261115', 'text': '26.11.15(일)'}]
     # 제목에 없는 날짜 모양이면 날짜로 맞췄다고 알려 준다
     r = listing(client, q='2026-11-15')
     assert r['matches'][0]['where'] == [{'field': '날짜', 'token': '2026-11-15', 'text': '26.11.15(일)'}]
@@ -229,6 +230,10 @@ def test_search_tells_why_it_matched(client, db):
     # 조각마다 한 줄씩(조각이 서로 다른 칸에서 맞을 수 있다)
     r = listing(client, q='자랍니다 2026-11-22')
     assert [w['field'] for w in r['matches'][0]['where']] == ['쇼츠 본문', '날짜']
+
+    # 제목에도 대본에도 있으면 둘 다 알려 준다
+    r = listing(client, q='광야')
+    assert [w['field'] for w in r['matches'][0]['where']] == ['제목', '설교 주제', '쇼츠 본문']
 
     # 같은 주라서 함께 나온 기록은 이유 목록에 넣지 않는다
     assert listing(client, q='주의 은혜라')['matched'] == 1
