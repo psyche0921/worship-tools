@@ -10,9 +10,10 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, gemini
+from . import auth, gemini, youtube
 from .config import Settings
 from .db import connect, init_db, seed_admins
+from .auto import AutoRunner, seed_auto_user
 from .jobs import JobRunner, mark_interrupted
 from .routes import admin, records, shorts
 
@@ -24,7 +25,8 @@ SAFE_METHODS = {'GET', 'HEAD', 'OPTIONS'}
 
 def create_app(settings: Settings | None = None,
                verify_token: auth.TokenVerifier = auth.google_verifier,
-               gemini_call: gemini.GeminiCall | None = None) -> FastAPI:
+               gemini_call: gemini.GeminiCall | None = None,
+               yt_fetch: youtube.Fetch | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
 
     @asynccontextmanager
@@ -33,10 +35,13 @@ def create_app(settings: Settings | None = None,
         conn = connect(settings.db_path)
         try:
             seed_admins(conn, settings.admin_emails)
+            seed_auto_user(conn)
             mark_interrupted(conn)
         finally:
             conn.close()
+        app.state.auto.start()
         yield
+        app.state.auto.stop()
         for task in list(app.state.jobs.tasks):
             task.cancel()
 
@@ -45,6 +50,8 @@ def create_app(settings: Settings | None = None,
     app.state.verify_token = verify_token
     app.state.gemini = gemini_call or gemini.make_client(settings.gemini_api_key)
     app.state.jobs = JobRunner(app)
+    app.state.yt_fetch = yt_fetch or youtube.make_fetch()
+    app.state.auto = AutoRunner(app)
 
     @app.middleware('http')
     async def check_origin(request: Request, call_next):

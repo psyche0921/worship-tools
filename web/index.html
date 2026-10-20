@@ -106,6 +106,8 @@ button.confirm{background:var(--err)!important;color:#fff!important;border-color
 .mrow button{flex:none;padding:6px 12px;font-size:.82rem}
 .warn{color:var(--warn);font-size:.85rem;margin:0 0 8px}
 .rec-hint{font-size:.8rem;color:var(--muted);margin:10px 0 0}
+.chk{display:flex;align-items:center;gap:8px;margin:12px 0 0;color:var(--text);font-size:.9rem;cursor:pointer}
+.chk input{width:18px;height:18px;flex:none;accent-color:var(--accent)}
 #recWhyList .hm{white-space:normal;word-break:break-word}
 #recWhyList .hm b{color:var(--text);font-weight:600}
 #recWhyList mark{background:rgba(214,54,47,.18);color:inherit;border-radius:3px;padding:0 1px}
@@ -229,6 +231,22 @@ button.confirm{background:var(--err)!important;color:#fff!important;border-color
       </div>
       <div class="row"><button id="saveSettings">저장</button></div>
       <div class="msg" id="settingsMsg"></div>
+    </div>
+
+    <div class="card">
+      <label>자동 쇼츠 기획</label>
+      <p class="rec-hint" style="margin:0 0 10px">매주 월요일 오후 1시에 교회 유튜브 채널에서 그 주일 예배 영상을 찾아, 설교 구간 찾기부터 쇼츠 기획·설교 대본까지 만들어 작업 기록에 넣어 둬요. 영상이 아직 없으면 저녁 6시까지 30분마다 다시 봅니다.</p>
+      <label class="chk"><input type="checkbox" id="autoEnabled"> 월요일 오후 1시에 자동으로 기획하기</label>
+      <div class="field">
+        <label for="ytChannel">교회 유튜브 채널</label>
+        <input id="ytChannel" placeholder="https://www.youtube.com/@bridgechurch_Daejeon" autocomplete="off">
+      </div>
+      <div class="vh-meta" id="autoMeta"></div>
+      <div class="row">
+        <button class="ghost" id="saveAuto">저장</button>
+        <button class="ghost" id="runAuto">지금 한 번 실행</button>
+      </div>
+      <div class="msg" id="autoMsg"></div>
     </div>
 
     <div class="card">
@@ -1503,8 +1521,16 @@ function twoStep(btn, label, fn){
   };
 }
 
+const AUTO_LABEL = {done: '기획 완료', skip: '이미 기획한 영상', none: '영상 없음', error: '실패', off: '꺼져 있음'};
+
 function fillSettings(st){
   $('#skillText').value = st.skill;
+  $('#autoEnabled').checked = !!st.autoEnabled;
+  $('#ytChannel').value = st.channel || '';
+  const a = st.autoLast || {};
+  $('#autoMeta').textContent = a.at
+    ? `마지막 실행: ${fmtWhen(a.at)} · ${AUTO_LABEL[a.status] || a.status} · ${a.message || ''}`
+    : '아직 실행한 적이 없어요.' + (st.youtubeKeySet ? '' : ' (YouTube API 키가 없어서 채널 페이지를 읽어요)');
   $('#gModel').value = st.model;
   $('#gModel').placeholder = st.defaultModel;
   $('#keyWarn').hidden = st.geminiKeySet;
@@ -1548,6 +1574,32 @@ $('#saveSettings').onclick = async e => {
     fillSettings(await api('/api/settings', {method: 'PUT', body: {skill: $('#skillText').value, model: $('#gModel').value.trim()}}));
     msg.textContent = '저장했어요.';
   }catch(err){ msg.className = 'msg err'; msg.textContent = err.message; }
+  finally{ btn.disabled = false; }
+};
+
+$('#saveAuto').onclick = async e => {
+  const btn = e.currentTarget, msg = $('#autoMsg');
+  btn.disabled = true; msg.className = 'msg'; msg.textContent = '';
+  try{
+    fillSettings(await api('/api/settings', {method: 'PUT', body: {
+      channel: $('#ytChannel').value.trim(), autoEnabled: $('#autoEnabled').checked}}));
+    msg.textContent = '저장했어요.';
+  }catch(err){ msg.className = 'msg err'; msg.textContent = err.message; }
+  finally{ btn.disabled = false; }
+};
+
+$('#runAuto').onclick = async e => {
+  const btn = e.currentTarget, msg = $('#autoMsg');
+  btn.disabled = true;
+  const stop = withTimer(msg, '지난 주일 영상으로 기획하는 중… (2~4분 걸려요)');
+  try{
+    const r = await api('/api/auto/run', {method: 'POST'});
+    stop();
+    msg.className = r.status === 'done' || r.status === 'skip' ? 'msg' : 'msg err';
+    msg.textContent = `${AUTO_LABEL[r.status] || r.status}: ${r.message || ''}`;
+    fillSettings(await api('/api/settings'));
+    records.invalidate();
+  }catch(err){ stop(); msg.className = 'msg err'; msg.textContent = err.message; }
   finally{ btn.disabled = false; }
 };
 

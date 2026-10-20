@@ -1,4 +1,4 @@
-"""관리자 전용: 세트리스트 기록, 설정(SKILL.md·모델), 팀원 관리.
+"""관리자 전용: 세트리스트 기록, 설정(SKILL.md·모델·자동 기획), 팀원 관리.
 
 세트리스트 항목도 v1의 hist.setlist와 같은 모양이다(key=재생목록 ID, title, url, at, ok, total, songs).
 """
@@ -6,10 +6,12 @@ import json
 import re
 import sqlite3
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from ..auth import get_db, get_settings, require_admin
+from .. import youtube
+from ..auto import AUTO_EMAIL, last_run
 from ..config import Settings
 from ..db import get_setting, now_ms, set_setting
 
@@ -93,6 +95,8 @@ def delete_setlist(key: str, db: sqlite3.Connection = Depends(get_db)):
 class SettingsIn(BaseModel):
     skill: str | None = Field(None, max_length=200_000)
     model: str | None = Field(None, max_length=100)
+    channel: str | None = Field(None, max_length=200)
+    autoEnabled: bool | None = None
 
 
 @router.get('/settings')
@@ -105,6 +109,10 @@ def read_settings(db: sqlite3.Connection = Depends(get_db), settings: Settings =
         'model': get_setting(db, 'model') or '',
         'defaultModel': settings.default_model,
         'geminiKeySet': bool(settings.gemini_api_key),
+        'channel': get_setting(db, 'yt_channel') or '',
+        'autoEnabled': (get_setting(db, 'auto_enabled') or '') == '1',
+        'autoLast': last_run(db),
+        'youtubeKeySet': bool(settings.youtube_api_key),
     }
 
 
@@ -114,6 +122,12 @@ def write_settings(body: SettingsIn, user: dict = Depends(require_admin),
     model = (body.model or '').strip() if body.model is not None else None
     if model and not MODEL.match(model):
         raise HTTPException(400, '모델 이름을 확인하세요. (예: gemini-3.8-flash)')
+    channel = (body.channel or '').strip() if body.channel is not None else None
+    if channel:
+        try:
+            youtube.channel_url(channel)
+        except youtube.YoutubeError as e:
+            raise HTTPException(400, str(e))
     with db:
         if body.skill is not None:
             set_setting(db, 'skill_md', body.skill, user['email'])
@@ -122,7 +136,17 @@ def write_settings(body: SettingsIn, user: dict = Depends(require_admin),
                 set_setting(db, 'model', model, user['email'])
             else:
                 db.execute("DELETE FROM settings WHERE key = 'model'")  # 비우면 기본 모델
+        if channel is not None:
+            set_setting(db, 'yt_channel', channel, user['email'])
+        if body.autoEnabled is not None:
+            set_setting(db, 'auto_enabled', '1' if body.autoEnabled else '', user['email'])
     return read_settings(db, settings)
+
+
+@router.post('/auto/run')
+async def run_auto(request: Request, db: sqlite3.Connection = Depends(get_db)):
+    """'지금 한 번 실행'. 월요일을 기다리지 않고 지난 주일 영상으로 바로 돌린다."""
+    return await request.app.state.auto.run_once(db, force=True)
 
 
 # ---------- 팀원 ----------
@@ -133,9 +157,10 @@ class MemberIn(BaseModel):
 
 
 def list_members(db: sqlite3.Connection) -> list[dict]:
+    # 자동 기획이 쓰는 계정은 사람이 아니라서 명단에서 뺀다.
     rows = db.execute(
-        "SELECT email, name, role, created_at, last_login_at FROM users "
-        "ORDER BY role = 'admin' DESC, created_at, email"
+        "SELECT email, name, role, created_at, last_login_at FROM users WHERE email <> ? "
+        "ORDER BY role = 'admin' DESC, created_at, email", (AUTO_EMAIL,)
     ).fetchall()
     return [{'email': r['email'], 'name': r['name'], 'role': r['role'],
              'createdAt': r['created_at'], 'lastLoginAt': r['last_login_at']} for r in rows]

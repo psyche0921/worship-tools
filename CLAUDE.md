@@ -22,6 +22,14 @@
 - 권한은 반드시 서버 의존성(`current_user`, `require_admin`)으로 막습니다. 화면에서 숨기는 것만으로는 안 됩니다.
 - 배포: 170번 서버 `~/worship-tools`에서 `deploy/deploy.sh`(git pull → docker compose). 설정 값은 서버의 `deploy/.env`(git 제외). nginx 설정과 certbot은 sudo가 필요해서 사용자가 실행합니다.
 
+## 자동 쇼츠 기획 (v2)
+
+- 매주 **월요일 오후 1시(KST)**, `app/auto.py`의 `AutoRunner`가 교회 유튜브 채널에서 그 주일 예배 영상을 찾아 설교 구간 찾기 → 쇼츠 기획 → 대본까지 돌립니다. 영상이 아직 없으면 저녁 6시까지 30분마다 다시 봅니다(5분마다 깨어나 `due()`로 판단하므로 서버를 껐다 켜도 그 주 안에서 따라잡습니다).
+- 영상은 **제목에 든 날짜**로 고릅니다(`2026.10.18` 같은 표기). 날짜가 맞는 영상이 없으면 '아직 안 올라옴'으로 보고 다시 시도합니다.
+- 찾는 방법은 두 가지입니다(`app/youtube.py`). `YOUTUBE_API_KEY`가 있으면 Data API(업로드 재생목록)를 먼저 쓰고, 없거나 실패하면 채널 `/streams` 페이지의 `ytInitialData`를 읽습니다. 페이지 구조(`lockupViewModel`)는 유튜브가 바꾸면 깨질 수 있으니 테스트의 샘플을 함께 고치세요.
+- 자동으로 만든 기록은 `auto@worship.local`(이름 '자동') 계정이 만든 것으로 남습니다. 로그인할 수 없는 주소이고 팀원 명단에서는 숨깁니다.
+- 켜기·끄기와 채널 주소, 마지막 실행 결과는 설정 탭에 있습니다(`auto_enabled`, `yt_channel`, `auto_last` 설정 값). '지금 한 번 실행'은 `POST /api/auto/run`입니다.
+
 ## 현재 구조 (v1, 정적 페이지)
 
 - `index.html` 파일 하나에 HTML, CSS, JS가 모두 들어 있고, 빌드 단계는 없습니다. 현재 GitHub Pages(`https://psyche0921.github.io/worship-tools/`)로 배포되어 있습니다.

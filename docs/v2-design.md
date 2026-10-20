@@ -144,7 +144,8 @@ jobs     (id TEXT PK, kind TEXT, status TEXT, input_json TEXT, result_json TEXT,
 | `GET /api/setlists`, `GET /api/setlists/{재생목록 ID}` | 관리자 | 목록 / 상세(원본 메시지 포함) |
 | `POST /api/setlists` | 관리자 | 재생목록을 만든 뒤 결과 저장(원본 메시지 포함) |
 | `DELETE /api/setlists/{재생목록 ID}` | 관리자 | 기록 삭제(YouTube 재생목록은 지우지 않음) |
-| `GET/PUT /api/settings` | 관리자 | SKILL.md, 모델 |
+| `GET/PUT /api/settings` | 관리자 | SKILL.md, 모델, 자동 기획(켜기·채널·마지막 실행 결과) |
+| `POST /api/auto/run` | 관리자 | 자동 기획을 지금 한 번 실행(월요일을 기다리지 않고) |
 | `GET/POST/DELETE /api/members` | 관리자 | 허용 이메일 관리(관리자 자신은 삭제 불가) |
 
 ## 8. 화면 변경
@@ -204,6 +205,7 @@ v2 화면을 `web/`에 따로 두는 이유: 루트 `index.html`을 v2로 바꾸
 | `ADMIN_EMAILS` | 관리자 이메일(쉼표로 구분) |
 | `PUBLIC_ORIGIN` | `https://bbc.ppsoft.kr` (Origin 검사, 쿠키) |
 | `DEFAULT_MODEL` | `gemini-3.8-flash` (설정 탭 값이 우선) |
+| `YOUTUBE_API_KEY` | (선택) 자동 기획이 최근 영상을 찾을 때. 없으면 채널 페이지를 읽는다 |
 | `DAILY_PLAN_LIMIT` | 사용자별 하루 쇼츠 기획 횟수, 기본 20 |
 
 ## 12. 배포 절차

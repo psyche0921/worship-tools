@@ -70,6 +70,10 @@ class JobRunner:
     def start(self, job_id: str) -> None:
         self._spawn(self._run(job_id))
 
+    async def run_now(self, job_id: str) -> None:
+        """작업을 지금 끝까지 돌린다(자동 실행기용)."""
+        await self._run(job_id)
+
     def start_transcript(self, video_id: str, start: int, end: int) -> None:
         """이미 claim_transcript로 맡아 둔 대본을 받아쓴다."""
         self._spawn(self._run_transcript(video_id, start, end))

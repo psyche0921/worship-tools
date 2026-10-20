@@ -15,6 +15,7 @@ class Settings:
     public_origin: str = 'https://bbc.ppsoft.kr'
     default_model: str = 'gemini-3.8-flash'
     gemini_api_key: str = ''
+    youtube_api_key: str = ''
     daily_plan_limit: int = 20
     session_days: int = 30
 
@@ -32,6 +33,7 @@ class Settings:
             public_origin=env('PUBLIC_ORIGIN', cls.public_origin).rstrip('/'),
             default_model=env('DEFAULT_MODEL', cls.default_model),
             gemini_api_key=env('GEMINI_API_KEY', ''),
+            youtube_api_key=env('YOUTUBE_API_KEY', ''),
             daily_plan_limit=int(env('DAILY_PLAN_LIMIT', cls.daily_plan_limit)),
             session_days=int(env('SESSION_DAYS', cls.session_days)),
         )
