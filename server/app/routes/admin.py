@@ -130,6 +130,7 @@ def read_settings(db: sqlite3.Connection = Depends(get_db), settings: Settings =
         'sheetFolderId': get_setting(db, 'sheet_folder_id') or '',
         'sheetFolderName': get_setting(db, 'sheet_folder_name') or '',
         'pickerKey': settings.google_picker_key,
+        'pickerAppId': settings.google_picker_app_id,
         'driveIndexAt': int(get_setting(db, 'drive_index_at') or 0) or None,
         'driveIndexCount': sheets.index_count(db),
         'sheetPending': int(db.execute("SELECT count(*) FROM sheets WHERE sync <> 'drive'").fetchone()[0]),

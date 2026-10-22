@@ -171,7 +171,10 @@ CREATE INDEX drive_index_key ON drive_index(name_key);
 ### 브라우저 쪽 드라이브 코드
 
 - 토큰: 지금 `initTokenClient`의 `scope`에 `drive.file`을 더합니다 → `https://www.googleapis.com/auth/youtube https://www.googleapis.com/auth/drive.file`. 동의 창은 한 번만 뜹니다.
-- 폴더 고르기: Google Picker(`https://apis.google.com/js/api.js` → `gapi.load('picker')`). **브라우저용 API 키(developer key)가 필요**해서 `GOOGLE_PICKER_KEY`를 `.env`에 넣고 `/api/config`로 내려줍니다(리퍼러를 `https://bbc.ppsoft.kr/*`로 제한).
+- 폴더 고르기: Google Picker(`https://apis.google.com/js/api.js` → `gapi.load('picker')`). 두 값이 필요하고 둘 다 관리자만 보는 `/api/settings`로 내려줍니다(공개인 `/api/config`에 넣지 않습니다).
+  - `GOOGLE_PICKER_KEY` — 브라우저용 API 키(`setDeveloperKey`). 리퍼러 제한에 `https://bbc.ppsoft.kr/*` **와 `https://docs.google.com/*`** 를 함께 넣어야 합니다. Picker가 docs.google.com iframe에서 그려져서, 빼면 `API developer key is invalid`가 납니다.
+  - `GOOGLE_PICKER_APP_ID` — Cloud **프로젝트 번호**(`setAppId`). `drive.file` 범위로 Picker를 쓸 때 **필수**입니다. 이것이 없으면 고른 폴더가 이 앱에 허락되지 않습니다.
+  - Cloud 콘솔에서 **Google Picker API와 Google Drive API를 모두** 켜야 하고, API 키는 로그인·YouTube에 쓰는 OAuth 클라이언트와 **같은 프로젝트**여야 합니다.
 - 목록 읽기: `GET /drive/v3/files?q='{folderId}' in parents and trashed=false&fields=files(id,name,mimeType,size,modifiedTime)&pageSize=1000` (페이지 넘기기 포함) → `PUT /api/drive/index`.
 - 받기: `GET /drive/v3/files/{id}?alt=media` → Blob → 서버에 사본 업로드.
 - 올리기: `POST /upload/drive/v3/files?uploadType=multipart`, `parents: [folderId]`.
@@ -239,6 +242,6 @@ worship-tools                                   drdr
 
 - **Picker로 폴더를 고르면 그 안의 기존 파일까지 `drive.file` 범위로 읽히는지**는 **실제 드라이브로 아직 확인하지 못했습니다**(테스트에서는 Picker와 드라이브 API를 가짜로 대체합니다). 배포 뒤 설정 탭에서 폴더를 고르고 '목록 새로 읽기'가 악보를 몇 개 찾는지 보면 바로 알 수 있습니다. 0개로 나오거나 403이 나면 Picker에서 악보 **파일**을 여러 개 직접 고르는 방식으로 바꿔야 합니다(`driveList`를 Picker 결과로 대체).
 - 폴더 아래 하위 폴더까지 읽습니다(`driveList`, 폴더 50개·파일 20000개까지). 하위 폴더가 `drive.file`로 열리지 않으면 그 폴더만 조용히 건너뜁니다.
-- 구글 클라우드 콘솔(사용자가 직접): Picker API 활성화, 브라우저용 API 키 발급(리퍼러 제한 `https://bbc.ppsoft.kr/*`), OAuth 동의 화면 범위에 `drive.file` 추가.
+- 구글 클라우드 콘솔(사용자가 직접): Google Picker API와 Google Drive API 활성화, 브라우저용 API 키 발급(리퍼러 제한에 `https://bbc.ppsoft.kr/*` **와 `https://docs.google.com/*`**), 프로젝트 번호를 `GOOGLE_PICKER_APP_ID`에, OAuth 동의 화면 범위에 `drive.file` 추가. 범위를 추가하면 관리자가 다음에 재생목록·악보 작업을 할 때 동의 창을 한 번 더 봅니다.
 - 서버 디스크: `/home` 여유가 17GB입니다. 악보 PDF는 한 곡 수백 KB라 수백 곡이어도 문제없지만, 스캔 이미지가 섞이면 커질 수 있어 한 파일 20MB로 제한합니다.
 - 악보는 교회 안에서만 씁니다. 드라이브 파일을 링크 공유로 열지 않고, 로그인한 팀원만 서버 사본을 받습니다.

@@ -56,10 +56,15 @@ window.google=window.google||{};
 window.google.picker={ViewId:{FOLDERS:'folders'},Action:{PICKED:'picked',CANCEL:'cancel'},
  DocsView:class{constructor(){}setIncludeFolders(){return this}setSelectFolderEnabled(){return this}
    setMimeTypes(){return this}},
- PickerBuilder:class{setTitle(){return this}setOAuthToken(){return this}setDeveloperKey(){return this}
+ PickerBuilder:class{setTitle(){return this}setOAuthToken(){return this}
+   setDeveloperKey(k){window.__pickerKey=k;return this}
+   setAppId(a){window.__pickerAppId=a;return this}
    addView(){return this}setCallback(cb){this.cb=cb;return this}
-   build(){const cb=this.cb;return {setVisible(v){ if(v) setTimeout(()=>cb({action:'picked',
-     docs:[{id:'FOLDER1',name:'악보'}]}),10); }};}}};"""
+   build(){const cb=this.cb;
+     // drive.file 범위에서는 appId가 없으면 고른 폴더에 접근할 수 없다.
+     if(!window.__pickerAppId) throw new Error('setAppId가 빠졌어요');
+     return {setVisible(v){ if(v) setTimeout(()=>cb({action:'picked',
+       docs:[{id:'FOLDER1',name:'악보'}]}),10); }};}}};"""
 
 # 드라이브 악보 폴더에 들어 있는 것으로 가정하는 파일들(이름 규칙이 없는 상황을 흉내 낸다).
 DRIVE_FILES = [
@@ -125,7 +130,7 @@ def start_v2(db_path, gem):
     port = free_port()
     settings = Settings(db_path=db_path, sheets_dir=str(pathlib.Path(db_path).parent / 'sheets'),
                         google_client_id='test.apps.googleusercontent.com',
-                        google_picker_key='picker-key',
+                        google_picker_key='picker-key', google_picker_app_id='123456789',
                         admin_emails=[ADMIN], public_origin=f'http://127.0.0.1:{port}')
     app = create_app(settings, verify_token=fake_verifier, gemini_call=gem)
     server = uvicorn.Server(uvicorn.Config(app, host='127.0.0.1', port=port, log_level='warning'))
@@ -235,6 +240,9 @@ def main():
         pg.wait_for_function("document.querySelector('#sheetMeta').textContent.includes('악보 3개')", timeout=15000)
         assert pg.inner_text('#sheetState') == '악보'
         assert api(pg, '/api/settings')['body']['sheetFolderId'] == 'FOLDER1'
+        # drive.file 범위에서는 appId(프로젝트 번호)를 Picker에 넘겨야 한다
+        assert pg.evaluate('window.__pickerAppId') == '123456789'
+        assert pg.evaluate('window.__pickerKey') == 'picker-key'
 
         # 세트리스트 → 재생목록 2개
         pg.click('.tabs button[data-tab=setlist]')

@@ -296,7 +296,7 @@ button.confirm{background:var(--err)!important;color:#fff!important;border-color
     <div class="card">
       <label>악보 (구글 드라이브) <span class="badge" id="sheetState">폴더 없음</span></label>
       <p class="rec-hint" style="margin:0 0 10px">세트리스트를 만들 때 곡마다 드라이브의 악보를 찾아 붙여요. 악보는 이 폴더 한 곳에 곡 하나당 파일 하나로 둡니다. 팀원이 올린 악보는 서버에 먼저 저장되고, 여기서 드라이브로 보냅니다.</p>
-      <p class="warn" id="pickerWarn" hidden>서버에 GOOGLE_PICKER_KEY가 없어서 폴더를 고를 수 없어요. Google Cloud에서 Picker API를 켜고 브라우저용 API 키를 만들어 주세요.</p>
+      <p class="warn" id="pickerWarn" hidden>서버에 GOOGLE_PICKER_KEY 또는 GOOGLE_PICKER_APP_ID가 없어서 폴더를 고를 수 없어요. Google Cloud에서 Picker API와 Drive API를 켜고, 브라우저용 API 키(리퍼러에 <code>https://docs.google.com/*</code>도 넣어야 해요)와 프로젝트 번호를 넣어 주세요.</p>
       <div class="vh-meta" id="sheetMeta"></div>
       <div class="row">
         <button class="ghost" id="pickFolder">드라이브에서 폴더 고르기</button>
@@ -684,7 +684,8 @@ async function sheetConfig(reload){
 
 function setSheetConfig(st){
   SHEETCFG = {folderId: st.sheetFolderId || '', folderName: st.sheetFolderName || '',
-              pickerKey: st.pickerKey || '', maxMb: st.maxSheetMb || 20};
+              pickerKey: st.pickerKey || '', pickerAppId: st.pickerAppId || '',
+              maxMb: st.maxSheetMb || 20};
   return SHEETCFG;
 }
 
@@ -778,15 +779,18 @@ function loadPicker(){
 async function pickFolder(){
   const cfg = await sheetConfig();
   if(!cfg.pickerKey) throw new Error('서버에 GOOGLE_PICKER_KEY가 설정되지 않았어요.');
+  // drive.file 범위에서는 appId(Cloud 프로젝트 번호)가 있어야 고른 폴더가 이 앱에 허락된다.
+  if(!cfg.pickerAppId) throw new Error('서버에 GOOGLE_PICKER_APP_ID(Cloud 프로젝트 번호)가 설정되지 않았어요.');
   const token = await getToken();
   await loadPicker();
-  return new Promise((resolve, reject) => {
+  return new Promise(resolve => {
     const view = new google.picker.DocsView(google.picker.ViewId.FOLDERS)
       .setIncludeFolders(true).setSelectFolderEnabled(true).setMimeTypes(FOLDER_MIME);
     new google.picker.PickerBuilder()
       .setTitle('악보 폴더 고르기')
       .setOAuthToken(token)
       .setDeveloperKey(cfg.pickerKey)
+      .setAppId(cfg.pickerAppId)
       .addView(view)
       .setCallback(d => {
         if(d.action === google.picker.Action.PICKED) resolve(d.docs && d.docs[0]);
@@ -1962,7 +1966,7 @@ function fillSheetSettings(st){
   setSheetConfig(st);
   $('#sheetState').textContent = st.sheetFolderId ? (st.sheetFolderName || '폴더 선택됨') : '폴더 없음';
   $('#sheetState').className = 'badge' + (st.sheetFolderId ? ' on' : '');
-  $('#pickerWarn').hidden = !!st.pickerKey;
+  $('#pickerWarn').hidden = !!(st.pickerKey && st.pickerAppId);
   $('#syncIndex').disabled = !st.sheetFolderId;
   $('#sheetMeta').textContent = st.sheetFolderId
     ? (st.driveIndexAt

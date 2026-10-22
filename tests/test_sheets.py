@@ -298,7 +298,9 @@ def test_settings_folder_round_trip(client):
     index(client, '주의 은혜라.pdf')
     st = client.put('/api/settings', json={'sheetFolderId': 'F1', 'sheetFolderName': '악보'}).json()
     assert st['sheetFolderId'] == 'F1' and st['sheetFolderName'] == '악보'
-    assert st['pickerKey'] == 'picker-key' and st['driveIndexCount'] == 1
+    # Picker에는 API 키와 프로젝트 번호(appId)가 둘 다 필요하다(drive.file 범위).
+    assert st['pickerKey'] == 'picker-key' and st['pickerAppId'] == '123456789'
+    assert st['driveIndexCount'] == 1
     # 폴더를 비우면 그 폴더에서 읽어 둔 목록도 버린다.
     st = client.put('/api/settings', json={'sheetFolderId': ''}).json()
     assert st['driveIndexCount'] == 0 and st['driveIndexAt'] is None
