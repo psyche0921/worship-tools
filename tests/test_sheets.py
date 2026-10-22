@@ -1,4 +1,5 @@
 """악보: 곡 제목 정규화, 메들리 분리, 후보 찾기, 올리기·받기·zip, 권한."""
+import hashlib
 import io
 import json
 import zipfile
@@ -56,18 +57,32 @@ def test_split_songs(name, parts):
 # ---------- 드라이브 목록과 후보 ----------
 
 def index(client, *names):
-    files = [{'id': f'drive{i}', 'name': n, 'mimeType': 'application/pdf',
-              'size': '12345', 'modifiedTime': '2026-10-01T03:04:05.000Z'}
-             for i, n in enumerate(names)]
+    """관리자가 Picker에서 고른 악보를 목록에 넣는다. 파일 ID는 이름마다 하나로 정한다."""
+    files = [{'id': 'drive-' + hashlib.sha1(n.encode()).hexdigest()[:12], 'name': n,
+              'mimeType': 'application/pdf', 'size': '12345',
+              'modifiedTime': '2026-10-01T03:04:05.000Z'} for n in names]
     files.append({'id': 'folder1', 'name': '지난 주', 'mimeType': 'application/vnd.google-apps.folder'})
     return client.put('/api/drive/index', json={'files': files})
 
 
-def test_drive_index_replaces_and_skips_folders(client):
+def test_drive_index_adds_and_skips_folders(client):
+    """drive.file은 고른 파일에만 권한을 주므로, 목록은 여러 번에 걸쳐 덧붙인다."""
     login(client, ADMIN)
-    assert index(client, '주의 은혜라.pdf', '은혜.pdf').json()['count'] == 2  # 폴더는 빠진다
-    assert index(client, '하나만.pdf').json()['count'] == 1
-    assert client.get('/api/settings').json()['driveIndexCount'] == 1
+    r = index(client, '주의 은혜라.pdf', '은혜.pdf').json()
+    assert r['added'] == 2 and r['count'] == 2  # 폴더는 빠진다
+    r = index(client, '하나만.pdf').json()
+    assert r['added'] == 1 and r['count'] == 3  # 덧붙인다(통째로 바꾸지 않는다)
+    assert client.get('/api/settings').json()['driveIndexCount'] == 3
+    # 같은 파일을 다시 고르면 늘어나지 않는다
+    assert index(client, '하나만.pdf').json()['count'] == 3
+
+
+def test_drive_index_replace(client):
+    login(client, ADMIN)
+    index(client, '주의 은혜라.pdf', '은혜.pdf')
+    r = client.put('/api/drive/index', json={'replace': True, 'files': [
+        {'id': 'only', 'name': '하나만.pdf', 'mimeType': 'application/pdf'}]}).json()
+    assert r['added'] == 1 and r['count'] == 1
 
 
 def test_match_finds_by_contains(client):

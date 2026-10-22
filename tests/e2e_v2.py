@@ -55,48 +55,62 @@ FAKE_GSI = """window.google={accounts:{
    requestAccessToken(){setTimeout(()=>c.callback({access_token:'tok',expires_in:3600}),10)}};return c;}}}};"""
 
 
-# 구글 Picker 흉내. 폴더를 고르면 바로 FOLDER1을 돌려준다(FAKE_GSI가 만든 window.google에 덧붙인다).
+# 구글 Picker 흉내(FAKE_GSI가 만든 window.google에 덧붙인다).
+# 폴더 보기는 FOLDER1을, 파일 보기는 window.__pickFiles에 넣어 둔 것을 돌려준다.
+# 고른 것은 window.__picks에 쌓여서 어떤 보기로 무엇을 검색했는지 확인할 수 있다.
 FAKE_PICKER = """window.gapi={load:(n,o)=>o.callback()};
 window.google=window.google||{};
-window.google.picker={ViewId:{FOLDERS:'folders'},Action:{PICKED:'picked',CANCEL:'cancel'},
- DocsView:class{constructor(){}setIncludeFolders(){return this}setSelectFolderEnabled(){return this}
-   setMimeTypes(){return this}},
+window.google.picker={ViewId:{FOLDERS:'folders',DOCS:'docs'},
+ Action:{PICKED:'picked',CANCEL:'cancel'},
+ Feature:{MULTISELECT_ENABLED:'multiselectEnabled'},
+ DocsView:class{constructor(v){this.viewId=v||'docs'}
+   setIncludeFolders(){return this}setSelectFolderEnabled(){return this}
+   setMimeTypes(m){this.mimes=m;return this}
+   setQuery(q){this.query=q;return this}setParent(p){this.parent=p;return this}},
  PickerBuilder:class{setTitle(){return this}setOAuthToken(){return this}
    setDeveloperKey(k){window.__pickerKey=k;return this}
    setAppId(a){window.__pickerAppId=a;return this}
-   addView(){return this}setCallback(cb){this.cb=cb;return this}
-   build(){const cb=this.cb;
-     // drive.file 범위에서는 appId가 없으면 고른 폴더에 접근할 수 없다.
+   enableFeature(f){this.multi=f;return this}
+   addView(v){this.view=v;return this}setCallback(cb){this.cb=cb;return this}
+   build(){const cb=this.cb,v=this.view,multi=!!this.multi;
+     // drive.file 범위에서는 appId가 없으면 고른 파일에 접근할 수 없다.
      if(!window.__pickerAppId) throw new Error('setAppId가 빠졌어요');
-     return {setVisible(v){ if(v) setTimeout(()=>cb({action:'picked',
-       docs:[{id:'FOLDER1',name:'악보'}]}),10); }};}}};"""
+     return {setVisible(x){ if(!x) return;
+       window.__picks=(window.__picks||[]).concat([
+         {viewId:v.viewId,query:v.query||'',parent:v.parent||'',mimes:v.mimes||'',multi:multi}]);
+       const docs = v.viewId==='folders' ? [{id:'FOLDER1',name:'악보'}] : (window.__pickFiles||[]);
+       setTimeout(()=>cb(docs.length?{action:'picked',docs:docs}:{action:'cancel'}),10); }};}}};"""
 
-# 드라이브 악보 폴더에 들어 있는 것으로 가정하는 파일들(이름 규칙이 없는 상황을 흉내 낸다).
+# 드라이브에 들어 있는 것으로 가정하는 악보들(이름 규칙이 없는 상황을 흉내 낸다).
+# Picker가 돌려주는 모양(sizeBytes·lastEditedUtc)으로 둔다.
 DRIVE_FILES = [
     {'id': 'd1', 'name': '01_새 힘 얻으리_A.pdf', 'mimeType': 'application/pdf',
-     'size': '2048', 'modifiedTime': '2026-10-01T03:04:05.000Z'},
+     'sizeBytes': 2048, 'lastEditedUtc': 1790000000000},
     {'id': 'd2', 'name': '나로부터.pdf', 'mimeType': 'application/pdf',
-     'size': '2048', 'modifiedTime': '2026-10-02T03:04:05.000Z'},
+     'sizeBytes': 2048, 'lastEditedUtc': 1790000000000},
     {'id': 'd3', 'name': '기대 (G).pdf', 'mimeType': 'application/pdf',
-     'size': '2048', 'modifiedTime': '2026-10-03T03:04:05.000Z'},
+     'sizeBytes': 2048, 'lastEditedUtc': 1790000000000},
 ]
 FAKE_PDF = b'%PDF-1.4\n% e2e fake sheet\n'
 
 
-def drive_route(uploads):
-    """드라이브 API 흉내: 폴더 목록 읽기, 파일 내려받기, 올리기."""
+def drive_route(uploads, lists):
+    """드라이브 API 흉내: 파일 내려받기와 올리기.
+
+    `drive.file` 범위는 고른 파일에만 권한을 주므로 **폴더 목록 읽기는 쓸 수 없다**
+    (2026-10-22 실제로 확인). 목록을 읽으려 하면 테스트가 바로 알아차리도록 기록한다.
+    """
     def handle(route):
         url = route.request.url
         if '/upload/drive/' in url:
-            uploads.append(route.request.url)
+            uploads.append(url)
             route.fulfill(status=200, content_type='application/json',
                           body=json.dumps({'id': f'up{len(uploads)}', 'name': f'올린악보{len(uploads)}.pdf'}))
         elif 'alt=media' in url:
             route.fulfill(status=200, content_type='application/pdf', body=FAKE_PDF)
         else:
-            assert 'FOLDER1' in url and 'trashed' in url, url
-            route.fulfill(status=200, content_type='application/json',
-                          body=json.dumps({'files': DRIVE_FILES}, ensure_ascii=False))
+            lists.append(url)
+            route.fulfill(status=200, content_type='application/json', body='{"files": []}')
     return handle
 
 
@@ -157,15 +171,16 @@ def youtube_route(counter):
     return handle
 
 
-def new_page(browser, cred, errors, counter, uploads=None):
+def new_page(browser, cred, errors, counter, uploads=None, lists=None):
     ctx = browser.new_context(viewport={'width': 390, 'height': 844}, accept_downloads=True)
     ctx.add_init_script(f'window.__cred = {json.dumps(cred)};')
     pg = ctx.new_page()
     pg.on('pageerror', lambda e: errors.append(str(e)))
     pg.route('**/accounts.google.com/**', lambda r: r.fulfill(status=200, content_type='text/javascript', body=FAKE_GSI))
     pg.route('**/apis.google.com/js/api.js', lambda r: r.fulfill(status=200, content_type='text/javascript', body=FAKE_PICKER))
-    pg.route('**/www.googleapis.com/drive/**', drive_route(uploads if uploads is not None else []))
-    pg.route('**/www.googleapis.com/upload/drive/**', drive_route(uploads if uploads is not None else []))
+    up, ls = (uploads if uploads is not None else []), (lists if lists is not None else [])
+    pg.route('**/www.googleapis.com/drive/**', drive_route(up, ls))
+    pg.route('**/www.googleapis.com/upload/drive/**', drive_route(up, ls))
     pg.route('**/www.googleapis.com/youtube/**', youtube_route(counter))
     pg.route('**/i.ytimg.com/**', lambda r: r.abort())
     pg.route('**/generativelanguage.googleapis.com/**', lambda r: r.abort())  # 브라우저는 Gemini를 부르면 안 됨
@@ -188,7 +203,7 @@ def main():
     tmp = tempfile.mkdtemp()
     gem = FakeGemini()
     server, base = start_v2(str(pathlib.Path(tmp) / 'worship.db'), gem)
-    errors, counter, uploads = [], {'n': 0}, []
+    errors, counter, uploads, lists = [], {'n': 0}, [], []
     sheet_pdf = pathlib.Path(tmp) / 'upload.pdf'
     sheet_pdf.write_bytes(FAKE_PDF)
 
@@ -205,7 +220,7 @@ def main():
         ctx.close()
 
         # ---------- 관리자 ----------
-        ctx, pg = new_page(browser, f'ok:{ADMIN}', errors, counter, uploads)
+        ctx, pg = new_page(browser, f'ok:{ADMIN}', errors, counter, uploads, lists)
         login(pg, base)
         assert '관리자' in pg.inner_text('#whoami')
         assert pg.is_visible('#tabs') and pg.is_visible('#tab-setlist')
@@ -239,17 +254,29 @@ def main():
         pg.wait_for_function("document.querySelectorAll('#memberList .mrow').length === 2")
         assert pg.locator('#memberList .mrow').nth(0).locator('button').count() == 0  # 관리자는 삭제 버튼 없음
 
-        # 악보: Picker로 폴더를 고르면 이어서 드라이브 목록을 읽는다
-        assert pg.inner_text('#sheetState') == '폴더 없음' and pg.is_disabled('#syncIndex')
+        # 악보: 올릴 폴더를 고른다(폴더는 '새 악보를 넣을 곳'일 뿐, 목록 읽기에는 못 쓴다)
+        assert pg.inner_text('#sheetState') == '고른 악보 없음'
         pg.click('#pickFolder')
-        pg.wait_for_function("document.querySelector('#sheetMeta').textContent.includes('악보 3개')", timeout=15000)
-        assert pg.inner_text('#sheetState') == '악보'
+        pg.wait_for_function("document.querySelector('#sheetMsg').textContent.includes('올려요')", timeout=15000)
         assert api(pg, '/api/settings')['body']['sheetFolderId'] == 'FOLDER1'
         # drive.file 범위에서는 appId(프로젝트 번호)를 Picker에 넘겨야 한다
         assert pg.evaluate('window.__pickerAppId') == '123456789'
         assert pg.evaluate('window.__pickerKey') == 'picker-key'
         # 악보는 drive.file 토큰만 받는다(youtube와 함께 요청하면 구글이 400을 낸다)
         assert pg.evaluate('window.__scopes') == ['https://www.googleapis.com/auth/drive.file']
+
+        # 쓸 악보를 Picker에서 여러 개 고른다 → 이 파일들만 이 앱이 쓸 수 있다
+        pg.evaluate('files => window.__pickFiles = files', DRIVE_FILES)
+        pg.click('#syncIndex')
+        pg.wait_for_function("document.querySelector('#sheetMsg').textContent.includes('악보 3개를 골랐어요')",
+                             timeout=15000)
+        assert pg.inner_text('#sheetState') == '악보 3개'
+        assert api(pg, '/api/settings')['body']['driveIndexCount'] == 3
+        picks = pg.evaluate('window.__picks')
+        assert [p['viewId'] for p in picks] == ['folders', 'docs']
+        assert picks[1]['multi'] is True
+        assert picks[1]['parent'] == 'FOLDER1' and 'application/pdf' in picks[1]['mimes']
+        assert lists == [], lists   # 폴더 목록을 읽으려 하면 안 된다
 
         # 세트리스트 → 재생목록 2개
         pg.click('.tabs button[data-tab=setlist]')
@@ -275,7 +302,19 @@ def main():
         pg.click('.modal .cand button')
         pg.wait_for_selector('#sh-2-1 .sh-n.ok')
 
-        # 후보가 없는 곡은 올린다 → 드라이브에도 올라간다
+        # 후보가 없는 곡은 '고르기'가 곡 제목으로 검색된 드라이브 창을 바로 연다
+        assert '아직 고른 악보가 없어요' in pg.inner_text('#sh-0-1') or '찾지 못했어요' in pg.inner_text('#sh-0-1')
+        pg.evaluate("""() => window.__pickFiles = [
+            {id: 'd9', name: '지금 우리가 - 리드시트.pdf', mimeType: 'application/pdf', sizeBytes: 1024}]""")
+        pg.click('#sh-0-1 .pick')
+        pg.wait_for_selector('#sh-0-1 .sh-n.ok', timeout=15000)
+        assert '지금 우리가 - 리드시트.pdf' in pg.inner_text('#sh-0-1')
+        last = pg.evaluate('window.__picks').pop()
+        assert last['viewId'] == 'docs' and last['query'] == '지금 우리가' and last['multi'] is False
+        # 드라이브에서 고른 것도 목록에 들어가서 다음부터 후보로 걸린다
+        assert api(pg, '/api/settings')['body']['driveIndexCount'] == 4
+
+        # 악보가 없는 곡은 올릴 수도 있다 → 드라이브에도 올라간다
         with pg.expect_file_chooser() as fc:
             pg.click('#sh-0-0 .up')
         fc.value.set_files(str(sheet_pdf))
@@ -295,9 +334,10 @@ def main():
         assert saved['status'] == 200 and saved['body']['rawMessage'] == SETLIST.replace('\r', ''), saved['status']
         assert saved['body']['title'] == 'Setlist 261118'
         # 재생목록을 만들면 그때 붙여 둔 악보도 기록에 함께 저장된다
-        assert len(saved['body']['songs'][0]['sheets']) == 1
-        assert saved['body']['songs'][0]['sheets'][0]['title'] == '내가 소망하는 아버지 나라'
-        assert saved['body']['songs'][1]['needSheets'] == ['지금 우리가']
+        songs = saved['body']['songs']
+        assert [s['sheets'][0]['title'] for s in songs[:2]] == ['내가 소망하는 아버지 나라', '지금 우리가']
+        assert songs[1]['sheets'][0]['name'] == '지금 우리가 - 리드시트.pdf'  # 드라이브에서 고른 것
+        assert songs[2]['sheets'] == [] and songs[2]['needSheets'] == ['예수 인도하셨네']
 
         # 쇼츠 기획 (서버 작업 + 폴링)
         pg.click('.tabs button[data-tab=shorts]')
@@ -387,14 +427,14 @@ def main():
         assert pg.locator('#recordView .song').count() == 3
 
         # 상세의 악보: 붙은 곡은 받기, 없는 곡은 올리기. 머리에 '악보 전체 받기(zip)'
-        assert '악보 전체 받기 (1)' in pg.inner_text('#recordView')
-        assert pg.locator('#recordView .sh a.btn').count() == 1
-        assert pg.locator('#recordView .sh .rup').count() == 2   # 악보가 없는 나머지 두 곡
+        assert '악보 전체 받기 (2)' in pg.inner_text('#recordView')
+        assert pg.locator('#recordView .sh a.btn').count() == 2
+        assert pg.locator('#recordView .sh .rup').count() == 1   # 악보가 없는 '예수 인도하셨네'
         with pg.expect_download() as d:
             pg.click('#recordView a.btn[href^="/api/sheets/zip/"]')
         assert d.value.suggested_filename.endswith('.zip'), d.value.suggested_filename
         with zipfile.ZipFile(io.BytesIO(pathlib.Path(d.value.path()).read_bytes())) as zf:
-            assert zf.namelist() == ['내가 소망하는 아버지 나라.pdf'], zf.namelist()
+            assert sorted(zf.namelist()) == ['내가 소망하는 아버지 나라.pdf', '지금 우리가.pdf'], zf.namelist()
         pg.click('#recordView .close')
 
         # 찬양 제목으로 검색 → 그 주의 쇼츠 기획도 함께 (한 묶음)
@@ -456,7 +496,7 @@ def main():
 
         # ---------- 팀원 ----------
         m_uploads = []
-        ctx, pg = new_page(browser, f'ok:{MEMBER}', errors, counter, m_uploads)
+        ctx, pg = new_page(browser, f'ok:{MEMBER}', errors, counter, m_uploads, [])
         login(pg, base)
         assert '홍길동 · 팀원' == pg.inner_text('#whoami')
         assert pg.is_visible('#tabs') and pg.is_hidden('#tab-setlist') and pg.is_hidden('#tab-admin')
@@ -478,7 +518,7 @@ def main():
         assert pg.locator('#recordView .del').count() == 0
 
         # 팀원도 악보를 받고 올린다. 다만 드라이브 토큰이 없어서 서버에만 올라간다(드라이브 대기).
-        assert pg.locator('#recordView .sh a.btn').count() == 1
+        assert pg.locator('#recordView .sh a.btn').count() == 2
         with pg.expect_file_chooser() as fc:
             pg.locator('#recordView .sh .rup').first.click()
         fc.value.set_files(str(sheet_pdf))

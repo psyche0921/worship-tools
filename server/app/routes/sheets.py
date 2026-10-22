@@ -225,12 +225,19 @@ class DriveFile(BaseModel):
 
 class IndexIn(BaseModel):
     files: list[DriveFile] = Field(default_factory=list, max_length=MAX_INDEX)
+    replace: bool = False
 
 
 @router.put('/drive/index')
 def put_index(body: IndexIn, user: dict = Depends(require_admin),
               db: sqlite3.Connection = Depends(get_db)):
-    """관리자 브라우저가 읽은 악보 폴더의 파일 목록으로 캐시를 통째로 바꾼다."""
+    """관리자가 Picker에서 고른 악보 파일을 목록에 넣는다.
+
+    `drive.file` 범위는 **파일 하나하나에 권한을 주기 때문에** 폴더를 골라도 그 안을
+    읽을 수 없다(2026-10-22 실제로 확인). 그래서 목록은 '관리자가 Picker에서 고른,
+    곧 이 앱이 쓸 수 있는 악보'다. 여러 번에 걸쳐 고를 수 있으니 기본은 **덧붙이기**이고,
+    `replace=true`면 통째로 바꾼다.
+    """
     now = now_ms()
     rows, seen = [], set()
     for f in body.files:
@@ -241,9 +248,11 @@ def put_index(body: IndexIn, user: dict = Depends(require_admin),
         rows.append((f.id, f.name, sh.song_key(f.name), f.mimeType,
                      sh.as_int(f.size), sh.as_ms(f.modifiedTime), now))
     with db:
-        db.execute('DELETE FROM drive_index')
+        if body.replace:
+            db.execute('DELETE FROM drive_index')
         db.executemany(
-            'INSERT INTO drive_index (file_id, name, name_key, mime, size, modified_at, updated_at) '
+            'INSERT OR REPLACE INTO drive_index '
+            '(file_id, name, name_key, mime, size, modified_at, updated_at) '
             'VALUES (?, ?, ?, ?, ?, ?, ?)', rows)
         set_setting(db, 'drive_index_at', str(now), user['email'])
-    return {'count': len(rows), 'at': now}
+    return {'added': len(rows), 'count': sh.index_count(db), 'at': now}
