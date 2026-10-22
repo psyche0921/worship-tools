@@ -261,7 +261,9 @@ def main():
         # 같은 주의 세트리스트와 쇼츠 기획이 한 묶음
         week = pg.locator(f'#recList .wk', has=pg.locator('.kind.k-shorts')).first
         assert week.locator('.kind').all_inner_texts() == ['세트리스트', '쇼츠 기획']
-        assert f'{sunday.year}년 {sunday.month}월 {sunday.day}일 주일' in week.locator('.wk-h').inner_text()
+        assert f'{sunday.year}년 {sunday.month}월 {sunday.day}일 주일' in week.locator('.wk-d').inner_text()
+        # 묶음 머리에 그 주에 뭐가 몇 건인지
+        assert week.locator('.wk-n').inner_text() == '세트리스트 1 · 쇼츠 기획 1'
 
         # 종류 거르기
         pg.select_option('#recKind', 'shorts')

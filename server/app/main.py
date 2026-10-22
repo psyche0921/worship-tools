@@ -2,6 +2,7 @@
 
 실행: uvicorn app.main:app  (server/ 디렉토리에서, 워커 1개)
 """
+import mimetypes
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -21,6 +22,10 @@ from .routes import admin, records, shorts
 STATIC_ROOT = Path(os.environ.get('STATIC_ROOT') or Path(__file__).resolve().parents[2])
 
 SAFE_METHODS = {'GET', 'HEAD', 'OPTIONS'}
+
+# 윈도우·일부 리눅스에는 등록되어 있지 않다. 타입이 틀리면 브라우저가 설치용 설정(manifest)을 읽지 않는다.
+mimetypes.add_type('application/manifest+json', '.webmanifest')
+mimetypes.add_type('image/svg+xml', '.svg')
 
 
 def create_app(settings: Settings | None = None,
