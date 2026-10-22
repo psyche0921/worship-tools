@@ -43,6 +43,7 @@
 - 팀원도 악보를 받고 올릴 수 있습니다. 팀원이 올린 것은 서버에만 두고(`sync='pending'`) 관리자가 설정 탭에서 드라이브로 보냅니다. **드라이브 연결(`driveFileId`)은 관리자만** 할 수 있습니다(서버에서 검사).
 - 악보를 지워도 **드라이브 원본은 지우지 않습니다**. 매핑과 서버 사본만 지웁니다.
 - 올릴 수 있는 형식은 앞머리 바이트로 가립니다(PDF·PNG·JPEG). 클라이언트가 말한 타입을 믿지 않습니다.
+- **`youtube`와 `drive.file` 범위는 한 번에 요청할 수 없습니다.** 함께 넣으면 구글이 `400 invalid_request: This request contains scopes that cannot be requested together`를 냅니다. 그래서 `getToken(scope)`이 범위마다 토큰 클라이언트를 따로 두고, `include_granted_scopes: false`로 이미 받아 둔 범위가 묶이지 않게 합니다(묶이면 같은 오류). 새 구글 범위를 넣을 때도 따로 받으세요.
 - Picker에는 두 값이 필요합니다. `GOOGLE_PICKER_KEY`(브라우저 API 키, 리퍼러에 `https://docs.google.com/*`도 넣어야 함 — Picker가 그 iframe에서 그려짐)와 `GOOGLE_PICKER_APP_ID`(Cloud 프로젝트 번호, `setAppId`). **`drive.file` 범위에서는 appId가 없으면 고른 폴더가 앱에 허락되지 않습니다.** 둘 다 관리자만 보는 `/api/settings`로 내려주고, 공개인 `/api/config`에 넣지 마세요.
 - `tools/check-sheets.py`는 악보 PDF가 프로그램 PDF인지 스캔인지 세어 봅니다(drdr 학습 1단계 비용 가늠용, `pip install pymupdf`).
 

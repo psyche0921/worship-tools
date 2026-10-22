@@ -487,7 +487,8 @@ async function onCredential(resp){
 $('#logoutBtn').onclick = async () => {
   try{ await api('/api/auth/logout', {method: 'POST'}); }catch(_){}
   if(window.google && google.accounts && google.accounts.id) google.accounts.id.disableAutoSelect();
-  accessToken = null;
+  clearAllTokens();
+  SHEETCFG = null;
   showLogin();
 };
 
@@ -538,39 +539,51 @@ function render(){
   loadSheetRows();
 }
 
-/* ---------- Google 로그인 ---------- */
-let tokenClient = null, accessToken = null, tokenExp = 0;
+/* ---------- Google 토큰 (범위마다 따로 받는다) ----------
+   youtube와 drive.file은 **한 번에 요청할 수 없다** — 함께 넣으면 구글이
+   `400 invalid_request: scopes that cannot be requested together`를 낸다.
+   그래서 범위마다 토큰 클라이언트를 따로 두고, `include_granted_scopes`를 꺼서
+   이미 받아 둔 범위가 함께 묶이지 않게 한다(묶이면 같은 오류가 난다).
+   drive.file은 민감 범위가 아니다. Picker로 고른 악보 폴더와 이 앱이 만든 파일만 다룬다. */
+const YT_SCOPE = 'https://www.googleapis.com/auth/youtube';
+const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
+const tokens = {};   // 범위 → {client, token, exp}
 
-function getToken(){
+function tokenSlot(scope){
+  return tokens[scope] || (tokens[scope] = {client: null, token: null, exp: 0});
+}
+
+function getToken(scope = YT_SCOPE){
+  const slot = tokenSlot(scope);
   return new Promise((resolve, reject) => {
-    if(accessToken && Date.now() < tokenExp - 60000) return resolve(accessToken);
+    if(slot.token && Date.now() < slot.exp - 60000) return resolve(slot.token);
     const cid = CONFIG.clientId;
     if(!cid) return reject(new Error('서버에 OAuth 클라이언트 ID가 설정되지 않았어요.'));
     if(!window.google || !google.accounts || !google.accounts.oauth2)
       return reject(new Error('Google 로그인 스크립트를 불러오지 못했어요. 잠시 후 다시 시도하세요.'));
-    if(!tokenClient){
-      tokenClient = google.accounts.oauth2.initTokenClient({
-        client_id: cid,
-        // drive.file은 민감 범위가 아니다. Picker로 고른 악보 폴더와 이 앱이 만든 파일만 다룬다.
-        scope: 'https://www.googleapis.com/auth/youtube https://www.googleapis.com/auth/drive.file',
-        callback: () => {}
+    if(!slot.client){
+      slot.client = google.accounts.oauth2.initTokenClient({
+        client_id: cid, scope, include_granted_scopes: false, callback: () => {}
       });
     }
-    tokenClient.callback = resp => {
+    slot.client.callback = resp => {
       if(resp.error) return reject(new Error('로그인 실패: ' + resp.error));
-      accessToken = resp.access_token;
-      tokenExp = Date.now() + (resp.expires_in || 3600) * 1000;
-      resolve(accessToken);
+      slot.token = resp.access_token;
+      slot.exp = Date.now() + (resp.expires_in || 3600) * 1000;
+      resolve(slot.token);
     };
-    tokenClient.error_callback = err => reject(new Error('로그인 창이 닫혔거나 차단됐어요. (' + (err.type || 'error') + ')'));
-    tokenClient.requestAccessToken({prompt: ''});
+    slot.client.error_callback = err => reject(new Error('로그인 창이 닫혔거나 차단됐어요. (' + (err.type || 'error') + ')'));
+    slot.client.requestAccessToken({prompt: ''});
   });
 }
+
+function clearToken(scope){ tokenSlot(scope).token = null; }
+function clearAllTokens(){ Object.keys(tokens).forEach(clearToken); }
 
 async function yt(path, body){
   const res = await fetch('https://www.googleapis.com/youtube/v3/' + path, {
     method: 'POST',
-    headers: {'Authorization': 'Bearer ' + accessToken, 'Content-Type': 'application/json'},
+    headers: {'Authorization': 'Bearer ' + tokenSlot(YT_SCOPE).token, 'Content-Type': 'application/json'},
     body: JSON.stringify(body)
   });
   const data = await res.json().catch(() => ({}));
@@ -663,7 +676,7 @@ async function createPlaylist(bi, btn){
   }catch(e){
     msg.className = 'msg err';
     msg.textContent = e.message;
-    if(e.status === 401){ accessToken = null; }
+    if(e.status === 401){ clearToken(YT_SCOPE); }
     if(e.status === 403 && /quota/i.test(e.message)) msg.textContent = '오늘 API 할당량을 다 썼어요. 내일 다시 시도하세요.';
   }finally{
     btn.disabled = false;
@@ -706,10 +719,10 @@ async function apiForm(path, fd){
 
 /* ---------- 드라이브 호출 ---------- */
 async function drive(url, init = {}){
-  const token = await getToken();
+  const token = await getToken(DRIVE_SCOPE);
   const res = await fetch(url, {...init, headers: {...(init.headers || {}), Authorization: 'Bearer ' + token}});
   if(res.ok) return res;
-  if(res.status === 401 || res.status === 403) accessToken = null;
+  if(res.status === 401 || res.status === 403) clearToken(DRIVE_SCOPE);
   const body = await res.json().catch(() => ({}));
   const reason = body.error && body.error.message ? body.error.message : 'HTTP ' + res.status;
   const err = new Error(res.status === 404
@@ -781,7 +794,7 @@ async function pickFolder(){
   if(!cfg.pickerKey) throw new Error('서버에 GOOGLE_PICKER_KEY가 설정되지 않았어요.');
   // drive.file 범위에서는 appId(Cloud 프로젝트 번호)가 있어야 고른 폴더가 이 앱에 허락된다.
   if(!cfg.pickerAppId) throw new Error('서버에 GOOGLE_PICKER_APP_ID(Cloud 프로젝트 번호)가 설정되지 않았어요.');
-  const token = await getToken();
+  const token = await getToken(DRIVE_SCOPE);
   await loadPicker();
   return new Promise(resolve => {
     const view = new google.picker.DocsView(google.picker.ViewId.FOLDERS)

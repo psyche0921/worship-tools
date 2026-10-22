@@ -170,7 +170,7 @@ CREATE INDEX drive_index_key ON drive_index(name_key);
 
 ### 브라우저 쪽 드라이브 코드
 
-- 토큰: 지금 `initTokenClient`의 `scope`에 `drive.file`을 더합니다 → `https://www.googleapis.com/auth/youtube https://www.googleapis.com/auth/drive.file`. 동의 창은 한 번만 뜹니다.
+- 토큰: **범위마다 따로 받습니다.** `youtube`와 `drive.file`을 한 요청에 함께 넣으면 구글이 `400 invalid_request: This request contains scopes that cannot be requested together`를 냅니다(2026-10-22 실제로 겪음). `getToken(scope)`이 범위마다 토큰 클라이언트를 따로 만들고, `include_granted_scopes: false`로 이미 받아 둔 범위가 함께 묶이지 않게 합니다(묶이면 같은 오류가 납니다). 그래서 동의 창은 재생목록을 만들 때 한 번, 악보를 처음 다룰 때 한 번 뜹니다.
 - 폴더 고르기: Google Picker(`https://apis.google.com/js/api.js` → `gapi.load('picker')`). 두 값이 필요하고 둘 다 관리자만 보는 `/api/settings`로 내려줍니다(공개인 `/api/config`에 넣지 않습니다).
   - `GOOGLE_PICKER_KEY` — 브라우저용 API 키(`setDeveloperKey`). 리퍼러 제한에 `https://bbc.ppsoft.kr/*` **와 `https://docs.google.com/*`** 를 함께 넣어야 합니다. Picker가 docs.google.com iframe에서 그려져서, 빼면 `API developer key is invalid`가 납니다.
   - `GOOGLE_PICKER_APP_ID` — Cloud **프로젝트 번호**(`setAppId`). `drive.file` 범위로 Picker를 쓸 때 **필수**입니다. 이것이 없으면 고른 폴더가 이 앱에 허락되지 않습니다.

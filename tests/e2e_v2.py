@@ -46,7 +46,12 @@ FAKE_GSI = """window.google={accounts:{
      renderButton(el){el.innerHTML='<button id="fakeGsi">Google로 로그인</button>';
        el.querySelector('button').onclick=()=>window.__gsiCb({credential:window.__cred})},
      disableAutoSelect(){}},
- oauth2:{initTokenClient:(o)=>{const c={callback:o.callback,
+ oauth2:{initTokenClient:(o)=>{
+   // youtube와 drive.file은 한 번에 요청할 수 없다(400 invalid_request). 범위마다 따로 받아야 한다.
+   if(String(o.scope).trim().split(/\\s+/).length>1) throw new Error('범위를 한꺼번에 요청했어요: '+o.scope);
+   if(o.include_granted_scopes!==false) throw new Error('include_granted_scopes를 꺼야 해요');
+   window.__scopes=(window.__scopes||[]).concat(o.scope);
+   const c={callback:o.callback,
    requestAccessToken(){setTimeout(()=>c.callback({access_token:'tok',expires_in:3600}),10)}};return c;}}}};"""
 
 
@@ -243,6 +248,8 @@ def main():
         # drive.file 범위에서는 appId(프로젝트 번호)를 Picker에 넘겨야 한다
         assert pg.evaluate('window.__pickerAppId') == '123456789'
         assert pg.evaluate('window.__pickerKey') == 'picker-key'
+        # 악보는 drive.file 토큰만 받는다(youtube와 함께 요청하면 구글이 400을 낸다)
+        assert pg.evaluate('window.__scopes') == ['https://www.googleapis.com/auth/drive.file']
 
         # 세트리스트 → 재생목록 2개
         pg.click('.tabs button[data-tab=setlist]')
@@ -280,6 +287,10 @@ def main():
         pg.locator('#blocks .create').nth(1).click()
         pg.wait_for_selector('#blocks .card >> nth=1 >> .result')
         pg.wait_for_function("""async () => (await (await fetch('/api/setlists')).json()).items.length === 3""")
+        # 재생목록은 youtube 토큰을 따로 받는다 → 범위 두 개가 각각 한 번씩
+        assert sorted(pg.evaluate('window.__scopes')) == [
+            'https://www.googleapis.com/auth/drive.file',
+            'https://www.googleapis.com/auth/youtube']
         saved = api(pg, '/api/setlists/PLtestplaylist1')
         assert saved['status'] == 200 and saved['body']['rawMessage'] == SETLIST.replace('\r', ''), saved['status']
         assert saved['body']['title'] == 'Setlist 261118'
