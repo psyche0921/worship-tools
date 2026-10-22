@@ -143,6 +143,28 @@ button.confirm{background:var(--err)!important;color:#fff!important;border-color
 .wk-y{font-size:.75rem;font-weight:500;color:var(--muted)}
 .wk-n{font-size:.78rem;color:var(--muted);white-space:nowrap}
 .wk-b{padding:2px 10px}
+/* 악보: 곡 카드 안의 한 줄(메들리는 곡마다 한 줄) */
+.sheets{display:flex;flex-direction:column;gap:5px;margin-top:7px}
+.sh{display:flex;align-items:center;gap:7px;font-size:.82rem;min-width:0}
+.sh-t{flex:none;font-size:.7rem;font-weight:700;color:var(--muted);background:var(--input);
+  border:1px solid var(--line);border-radius:99px;padding:1px 7px;white-space:nowrap;max-width:9em;
+  overflow:hidden;text-overflow:ellipsis}
+.sh-n{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sh-n.none{color:var(--muted)}
+.sh-n.ok{color:var(--ok)}
+.sh-n.pend{color:var(--warn)}
+.sh-n.gone{color:var(--err)}
+.sh button,.sh a.btn{flex:none;padding:4px 10px;font-size:.76rem;width:auto}
+/* 후보 고르기 창 */
+.modal{position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.5);display:flex;align-items:center;
+  justify-content:center;padding:16px}
+.modal>.card{width:100%;max-width:440px;max-height:82vh;overflow:auto;margin:0}
+.cand{display:flex;align-items:center;gap:8px;border-top:1px solid var(--line);padding:8px 0}
+.cand:first-child{border-top:0}
+.cand .ci{flex:1;min-width:0}
+.cand .cn{word-break:break-all;font-size:.9rem}
+.cand .cm{font-size:.75rem;color:var(--muted)}
+.cand button{flex:none;padding:5px 11px;font-size:.8rem;width:auto}
 </style>
 </head>
 <body>
@@ -269,6 +291,19 @@ button.confirm{background:var(--err)!important;color:#fff!important;border-color
         <button class="ghost" id="runAuto">지금 한 번 실행</button>
       </div>
       <div class="msg" id="autoMsg"></div>
+    </div>
+
+    <div class="card">
+      <label>악보 (구글 드라이브) <span class="badge" id="sheetState">폴더 없음</span></label>
+      <p class="rec-hint" style="margin:0 0 10px">세트리스트를 만들 때 곡마다 드라이브의 악보를 찾아 붙여요. 악보는 이 폴더 한 곳에 곡 하나당 파일 하나로 둡니다. 팀원이 올린 악보는 서버에 먼저 저장되고, 여기서 드라이브로 보냅니다.</p>
+      <p class="warn" id="pickerWarn" hidden>서버에 GOOGLE_PICKER_KEY가 없어서 폴더를 고를 수 없어요. Google Cloud에서 Picker API를 켜고 브라우저용 API 키를 만들어 주세요.</p>
+      <div class="vh-meta" id="sheetMeta"></div>
+      <div class="row">
+        <button class="ghost" id="pickFolder">드라이브에서 폴더 고르기</button>
+        <button class="ghost" id="syncIndex">목록 새로 읽기</button>
+      </div>
+      <div id="pendingList"></div>
+      <div class="msg" id="sheetMsg"></div>
     </div>
 
     <div class="card">
@@ -486,6 +521,7 @@ function render(){
             <div class="name">${esc(s.name || '(제목 없음)')}</div>
             ${s.notes.length ? `<div class="notes">${esc(s.notes.join('\n'))}</div>` : ''}
             <div class="st" id="st-${bi}-${si}"></div>
+            <div class="sheets" id="sh-${bi}-${si}"></div>
           </div>
         </div>`).join('')}
       <div class="row">
@@ -499,6 +535,7 @@ function render(){
   wrap.querySelectorAll('.create').forEach(btn => {
     btn.onclick = () => createPlaylist(+btn.closest('[data-b]').dataset.b, btn);
   });
+  loadSheetRows();
 }
 
 /* ---------- Google 로그인 ---------- */
@@ -514,7 +551,8 @@ function getToken(){
     if(!tokenClient){
       tokenClient = google.accounts.oauth2.initTokenClient({
         client_id: cid,
-        scope: 'https://www.googleapis.com/auth/youtube',
+        // drive.file은 민감 범위가 아니다. Picker로 고른 악보 폴더와 이 앱이 만든 파일만 다룬다.
+        scope: 'https://www.googleapis.com/auth/youtube https://www.googleapis.com/auth/drive.file',
         callback: () => {}
       });
     }
@@ -617,7 +655,7 @@ async function createPlaylist(bi, btn){
     try{
       await api('/api/setlists', {method: 'POST', body: {
         playlistId: pl.id, title, url, ok, total: block.songs.length,
-        songs: block.songs.map(({id, name, notes}) => ({id, name, notes})),
+        songs: block.songs.map(s => ({id: s.id, name: s.name, notes: s.notes, sheets: songSheets(s)})),
         rawMessage: $('#input').value
       }});
       records.invalidate();
@@ -630,6 +668,338 @@ async function createPlaylist(bi, btn){
   }finally{
     btn.disabled = false;
   }
+}
+
+/* ================= 악보 (구글 드라이브) =================
+   서버는 드라이브를 부르지 않는다(docs/sheets-design.md 1장). 브라우저가 드라이브를 읽고
+   쓰고, 그 결과만 서버에 알려 준다. 서버는 악보 사본과 곡↔악보 매핑을 보관한다. */
+
+let SHEETCFG = null;   // {folderId, folderName, pickerKey, maxMb}
+
+async function sheetConfig(reload){
+  if(SHEETCFG && !reload) return SHEETCFG;
+  if(!isAdmin()) return (SHEETCFG = {folderId: '', folderName: '', pickerKey: '', maxMb: 20});
+  return setSheetConfig(await api('/api/settings'));
+}
+
+function setSheetConfig(st){
+  SHEETCFG = {folderId: st.sheetFolderId || '', folderName: st.sheetFolderName || '',
+              pickerKey: st.pickerKey || '', maxMb: st.maxSheetMb || 20};
+  return SHEETCFG;
+}
+
+/* ---------- multipart로 서버에 올리기 ---------- */
+async function apiForm(path, fd){
+  let res;
+  try{ res = await fetch(path, {method: 'POST', body: fd, credentials: 'same-origin'}); }
+  catch(e){ throw new Error('서버에 연결하지 못했어요. 인터넷 연결을 확인하세요.'); }
+  const data = await res.json().catch(() => ({}));
+  if(!res.ok){
+    const err = new Error(typeof data.detail === 'string' ? data.detail
+      : '악보를 올리지 못했어요. (HTTP ' + res.status + ')');
+    err.status = res.status;
+    throw err;
+  }
+  return data;
+}
+
+/* ---------- 드라이브 호출 ---------- */
+async function drive(url, init = {}){
+  const token = await getToken();
+  const res = await fetch(url, {...init, headers: {...(init.headers || {}), Authorization: 'Bearer ' + token}});
+  if(res.ok) return res;
+  if(res.status === 401 || res.status === 403) accessToken = null;
+  const body = await res.json().catch(() => ({}));
+  const reason = body.error && body.error.message ? body.error.message : 'HTTP ' + res.status;
+  const err = new Error(res.status === 404
+    ? '드라이브에서 그 파일을 찾을 수 없어요. 폴더를 다시 골라 주세요.'
+    : '드라이브 요청이 실패했어요: ' + reason);
+  err.status = res.status;
+  throw err;
+}
+
+const DRIVE_FIELDS = 'nextPageToken,files(id,name,mimeType,size,modifiedTime)';
+const FOLDER_MIME = 'application/vnd.google-apps.folder';
+const MAX_FOLDERS = 50, MAX_FILES = 20000;
+
+/* 악보 폴더와 그 아래 폴더의 파일을 모두 읽는다(폴더는 MAX_FOLDERS까지). */
+async function driveList(folderId){
+  const files = [], queue = [folderId], seen = new Set([folderId]);
+  while(queue.length && seen.size <= MAX_FOLDERS && files.length < MAX_FILES){
+    const id = queue.shift();
+    let pageToken = '';
+    do{
+      const q = encodeURIComponent(`'${id}' in parents and trashed = false`);
+      const url = `https://www.googleapis.com/drive/v3/files?q=${q}&fields=${DRIVE_FIELDS}`
+        + `&pageSize=1000&orderBy=name${pageToken ? '&pageToken=' + pageToken : ''}`;
+      const data = await (await drive(url)).json();
+      for(const f of (data.files || [])){
+        if(f.mimeType === FOLDER_MIME){
+          if(!seen.has(f.id) && seen.size < MAX_FOLDERS){ seen.add(f.id); queue.push(f.id); }
+        }else if(files.length < MAX_FILES){ files.push(f); }
+      }
+      pageToken = data.nextPageToken || '';
+    }while(pageToken);
+  }
+  return files;
+}
+
+async function driveDownload(fileId){
+  const res = await drive(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`);
+  return res.blob();
+}
+
+async function driveUpload(folderId, name, file){
+  const fd = new FormData();
+  fd.append('metadata', new Blob([JSON.stringify({name, parents: [folderId]})], {type: 'application/json'}));
+  fd.append('file', file);
+  const res = await drive('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name',
+                          {method: 'POST', body: fd});
+  return res.json();
+}
+
+/* ---------- Picker (폴더 고르기) ---------- */
+let pickerReady = null;
+function loadPicker(){
+  if(pickerReady) return pickerReady;
+  pickerReady = new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://apis.google.com/js/api.js';
+    s.onload = () => gapi.load('picker', {
+      callback: resolve,
+      onerror: () => reject(new Error('구글 Picker를 불러오지 못했어요.'))
+    });
+    s.onerror = () => { pickerReady = null; reject(new Error('구글 Picker 스크립트를 불러오지 못했어요.')); };
+    document.head.appendChild(s);
+  });
+  return pickerReady;
+}
+
+async function pickFolder(){
+  const cfg = await sheetConfig();
+  if(!cfg.pickerKey) throw new Error('서버에 GOOGLE_PICKER_KEY가 설정되지 않았어요.');
+  const token = await getToken();
+  await loadPicker();
+  return new Promise((resolve, reject) => {
+    const view = new google.picker.DocsView(google.picker.ViewId.FOLDERS)
+      .setIncludeFolders(true).setSelectFolderEnabled(true).setMimeTypes(FOLDER_MIME);
+    new google.picker.PickerBuilder()
+      .setTitle('악보 폴더 고르기')
+      .setOAuthToken(token)
+      .setDeveloperKey(cfg.pickerKey)
+      .addView(view)
+      .setCallback(d => {
+        if(d.action === google.picker.Action.PICKED) resolve(d.docs && d.docs[0]);
+        else if(d.action === google.picker.Action.CANCEL) resolve(null);
+      })
+      .build().setVisible(true);
+  });
+}
+
+/* ---------- 파일 고르기 ---------- */
+const SHEET_ACCEPT = 'application/pdf,image/png,image/jpeg';
+function pickLocalFile(){
+  return new Promise(resolve => {
+    const el = document.createElement('input');
+    el.type = 'file';
+    el.accept = SHEET_ACCEPT;
+    el.onchange = () => resolve(el.files && el.files[0]);
+    el.click();
+  });
+}
+
+const SHEET_EXT = {'application/pdf': '.pdf', 'image/png': '.png', 'image/jpeg': '.jpg'};
+function sheetExt(file){
+  return SHEET_EXT[file.type] || ('.' + (file.name.split('.').pop() || 'pdf')).toLowerCase();
+}
+
+/* ---------- 악보 붙이기 ---------- */
+
+/* 드라이브의 후보를 골랐다 → 브라우저가 받아서 서버에 사본을 올린다. */
+async function linkCandidate(row, cand){
+  const blob = await driveDownload(cand.driveFileId);
+  const fd = new FormData();
+  fd.append('title', row.title);
+  fd.append('driveFileId', cand.driveFileId);
+  fd.append('driveName', cand.name);
+  fd.append('file', blob, cand.name);
+  row.sheet = await apiForm('/api/sheets', fd);
+  row.candidates = [];
+  return row.sheet;
+}
+
+/* 새 악보를 올린다. 관리자면 드라이브에도 올리고, 팀원이면 서버에만 둔다(pending). */
+async function uploadSheet(row, file){
+  const cfg = await sheetConfig();
+  const fd = new FormData();
+  fd.append('title', row.title);
+  if(isAdmin()){
+    if(!cfg.folderId) throw new Error('설정 탭에서 악보 폴더를 먼저 골라 주세요.');
+    const up = await driveUpload(cfg.folderId, row.title + sheetExt(file), file);
+    fd.append('driveFileId', up.id);
+    fd.append('driveName', up.name);
+  }
+  fd.append('file', file, file.name);
+  row.sheet = await apiForm('/api/sheets', fd);
+  row.candidates = [];
+  return row.sheet;
+}
+
+/* ---------- 후보 고르기 창 ---------- */
+function fmtSize(n){
+  return !n ? '' : n < 1024 * 1024 ? Math.max(1, Math.round(n / 1024)) + 'KB'
+    : (n / 1024 / 1024).toFixed(1) + 'MB';
+}
+
+function sheetModal(row, onPick){
+  const wrap = document.createElement('div');
+  wrap.className = 'modal';
+  wrap.innerHTML = `
+    <div class="card">
+      <div class="block-head">
+        <div class="vh-title" style="flex:1">${esc(row.title)} 악보 고르기</div>
+        <button class="ghost close" style="padding:6px 12px;flex:none">닫기</button>
+      </div>
+      <div class="vh-meta">드라이브 악보 폴더에서 이름이 비슷한 파일이에요. 고르면 다음부터 이 곡에 자동으로 붙어요.</div>
+      <div style="margin-top:10px">
+        ${row.candidates.map((c, i) => `
+          <div class="cand">
+            <div class="ci">
+              <div class="cn">${esc(c.name)}</div>
+              <div class="cm">${[fmtSize(c.size), c.modifiedAt ? fmtWhen(c.modifiedAt) : ''].filter(Boolean).join(' · ')}</div>
+            </div>
+            <button data-i="${i}">이걸로</button>
+          </div>`).join('')}
+      </div>
+      <div class="msg mmsg"></div>
+    </div>`;
+  const close = () => wrap.remove();
+  wrap.querySelector('.close').onclick = close;
+  wrap.onclick = e => { if(e.target === wrap) close(); };
+  const msg = wrap.querySelector('.mmsg');
+  wrap.querySelectorAll('.cand button').forEach(b => {
+    b.onclick = async () => {
+      const cand = row.candidates[+b.dataset.i];
+      wrap.querySelectorAll('.cand button').forEach(x => x.disabled = true);
+      msg.className = 'msg'; msg.textContent = '드라이브에서 받는 중…';
+      try{ await linkCandidate(row, cand); close(); onPick(); }
+      catch(e){
+        msg.className = 'msg err'; msg.textContent = e.message;
+        wrap.querySelectorAll('.cand button').forEach(x => x.disabled = false);
+      }
+    };
+  });
+  document.body.appendChild(wrap);
+}
+
+/* ---------- 세트리스트 탭의 악보 줄 ---------- */
+let sheetIndexed = 0;
+
+/* 미리보기를 그린 뒤 곡마다 악보를 찾는다(메들리는 서버가 쪼갠다). */
+async function loadSheetRows(){
+  if(!isAdmin()) return;
+  const names = [];
+  parsed.forEach(b => b.songs.forEach(s => names.push(s.name || '')));
+  if(!names.length) return;
+  let res;
+  try{ res = await api('/api/sheets/match', {method: 'POST', body: {names}}); }
+  catch(e){ return; }
+  sheetIndexed = res.indexed;
+  let i = 0;
+  parsed.forEach(b => b.songs.forEach(s => { s.sheetRows = (res.items[i++] || {}).songs || []; }));
+  parsed.forEach((b, bi) => b.songs.forEach((s, si) => drawSheetRows(bi, si)));
+  sheetConfig(true).catch(() => {});
+}
+
+function sheetRowHtml(row, many, bi, si, ri){
+  const s = row.sheet;
+  const label = many ? row.title : '악보';
+  let state, btns;
+  if(s){
+    state = `<span class="sh-n ${s.sync === 'drive' ? 'ok' : 'pend'}">${esc(s.name)}`
+      + `${s.sync === 'drive' ? '' : ' · 드라이브 대기'}</span>`;
+    btns = `<a class="btn ghost" href="/api/sheets/${s.id}/file">받기</a>`
+      + `<button class="ghost up" data-k="${bi}-${si}-${ri}">바꾸기</button>`;
+  }else if(row.candidates.length){
+    state = `<span class="sh-n none">비슷한 파일 ${row.candidates.length}개</span>`;
+    btns = `<button class="pick" data-k="${bi}-${si}-${ri}">고르기</button>`
+      + `<button class="ghost up" data-k="${bi}-${si}-${ri}">올리기</button>`;
+  }else{
+    state = `<span class="sh-n none">${sheetIndexed ? '찾지 못했어요' : '드라이브 목록이 비어 있어요'}</span>`;
+    btns = `<button class="ghost up" data-k="${bi}-${si}-${ri}">올리기</button>`;
+  }
+  return `<div class="sh"><span class="sh-t">${esc(label)}</span>${state}${btns}</div>`;
+}
+
+function drawSheetRows(bi, si){
+  const box = document.getElementById(`sh-${bi}-${si}`);
+  const song = parsed[bi] && parsed[bi].songs[si];
+  if(!box || !song || !song.sheetRows) return;
+  const rows = song.sheetRows;
+  box.innerHTML = rows.map((r, ri) => sheetRowHtml(r, rows.length > 1, bi, si, ri)).join('');
+  const at = k => { const [b, s, r] = k.split('-').map(Number); return parsed[b].songs[s].sheetRows[r]; };
+  box.querySelectorAll('.pick').forEach(btn => {
+    btn.onclick = () => sheetModal(at(btn.dataset.k), () => drawSheetRows(bi, si));
+  });
+  box.querySelectorAll('.up').forEach(btn => {
+    btn.onclick = async () => {
+      const row = at(btn.dataset.k);
+      const file = await pickLocalFile();
+      if(!file) return;
+      const card = btn.closest('[data-b]'), msg = card && card.querySelector('.msg');
+      btn.disabled = true;
+      if(msg){ msg.className = 'msg'; msg.textContent = `${row.title} 악보 올리는 중…`; }
+      try{
+        await uploadSheet(row, file);
+        if(msg) msg.textContent = `${row.title} 악보를 올렸어요.`;
+      }catch(e){ if(msg){ msg.className = 'msg err'; msg.textContent = e.message; } }
+      finally{ btn.disabled = false; drawSheetRows(bi, si); }
+    };
+  });
+}
+
+/* 재생목록을 저장할 때 함께 넣을 악보 목록 */
+function songSheets(song){
+  return (song.sheetRows || []).filter(r => r.sheet).map(r => ({sheetId: r.sheet.id, title: r.title}));
+}
+
+/* ---------- 기록 상세의 악보 줄 (팀원도 보고 올린다) ---------- */
+function recordSheetsHtml(song){
+  const list = song.sheets || [], need = song.needSheets || [];
+  if(!list.length && !need.length) return '';
+  const many = list.length + need.length > 1;
+  const rows = list.map(s => {
+    const label = many ? s.title : '악보';
+    if(s.missing) return `<div class="sh"><span class="sh-t">${esc(label)}</span>`
+      + `<span class="sh-n gone">${esc(s.title || '')} · 지워진 악보</span></div>`;
+    return `<div class="sh"><span class="sh-t">${esc(label)}</span>`
+      + `<span class="sh-n ${s.sync === 'drive' ? 'ok' : 'pend'}">${esc(s.name || s.title || '')}`
+      + `${s.sync === 'drive' ? '' : ' · 드라이브 대기'}</span>`
+      + (s.hasFile ? `<a class="btn ghost" href="/api/sheets/${s.id}/file">받기</a>` : '') + '</div>';
+  });
+  rows.push(...need.map(t => `<div class="sh"><span class="sh-t">${esc(many ? t : '악보')}</span>`
+    + '<span class="sh-n none">없어요</span>'
+    + `<button class="ghost rup" data-t="${esc(t)}">올리기</button></div>`));
+  return `<div class="sheets">${rows.join('')}</div>`;
+}
+
+/* 기록 상세에서 악보를 올린다. 올리면 그 곡이 나온 모든 주의 기록에서 보인다. */
+function bindRecordUploads(box, it){
+  box.querySelectorAll('.rup').forEach(btn => {
+    btn.onclick = async () => {
+      const title = btn.dataset.t;
+      const file = await pickLocalFile();
+      if(!file) return;
+      const msg = box.querySelector('.pdfMsg');
+      btn.disabled = true;
+      msg.className = 'msg'; msg.textContent = `${title} 악보 올리는 중…`;
+      try{
+        await uploadSheet({title}, file);
+        records.invalidate();
+        await openRecord('setlist', it.key);
+      }catch(e){ msg.className = 'msg err'; msg.textContent = e.message; btn.disabled = false; }
+    };
+  });
 }
 
 /* ================= 탭 ================= */
@@ -1369,6 +1739,7 @@ const records = {
 function recordMeta(it){
   if(it.kind === 'setlist'){
     return `${it.dateLabel} 예배 · ${it.total}곡` + (it.ok < it.total ? ` (${it.ok}곡 추가됨)` : '')
+      + (it.sheetsTotal ? ` · 악보 ${it.sheetsLinked}/${it.sheetsTotal}` : '')
       + (it.songs.length ? ' · ' + it.songs.join(', ') : '');
   }
   const r = shortsRange(it);
@@ -1515,6 +1886,10 @@ async function shortsDetail(it){
 }
 
 /* ---------- 세트리스트 기록 보기 ---------- */
+function sheetCount(it){
+  return (it.songs || []).reduce((n, s) => n + (s.sheets || []).filter(x => x.hasFile).length, 0);
+}
+
 function setlistViewInto(box, it, opts = {}){
   box.innerHTML = `
     <div class="card view-head">
@@ -1523,6 +1898,7 @@ function setlistViewInto(box, it, opts = {}){
       <div class="vh-meta">${esc((it.dateLabel ? it.dateLabel + ' 예배 · ' : '') + fmtWhen(it.at) + ' 생성 · ' + it.total + '곡'
         + (it.ok < it.total ? ` (${it.ok}곡 추가됨)` : ''))}</div>
       ${playlistResultHtml(it.title, it.url)}
+      ${sheetCount(it) ? `<div class="row"><a class="btn ghost" href="/api/sheets/zip/${encodeURIComponent(it.key)}">악보 전체 받기 (${sheetCount(it)})</a></div>` : ''}
       ${opts.del ? '<div class="row"><button class="ghost del" data-label="기록 삭제">기록 삭제</button></div>' : ''}
       <div class="msg pdfMsg"></div>
       <div style="margin-top:12px">
@@ -1532,6 +1908,7 @@ function setlistViewInto(box, it, opts = {}){
           <div class="meta">
             <div class="name"><a class="lnk" href="https://youtu.be/${s.id}" target="_blank" rel="noopener">${esc(s.name || '(제목 없음)')}</a></div>
             ${s.notes && s.notes.length ? `<div class="notes">${esc(s.notes.join('\n'))}</div>` : ''}
+            ${recordSheetsHtml(s)}
           </div>
         </div>`).join('')}
       </div>
@@ -1539,6 +1916,7 @@ function setlistViewInto(box, it, opts = {}){
   bindPlaylistResult(box, it.title, it.url);
   if(opts.close) box.querySelector('.close').onclick = opts.close;
   bindDelete(box, opts.del);
+  bindRecordUploads(box, it);
 }
 
 /* ================= 관리자 설정 ================= */
@@ -1576,7 +1954,101 @@ function fillSettings(st){
   $('#keyWarn').hidden = st.geminiKeySet;
   $('#skillMeta').textContent = st.skillUpdatedAt
     ? `마지막 수정: ${fmtWhen(st.skillUpdatedAt)} · ${st.skillUpdatedBy}` : '아직 등록된 지침이 없어요.';
+  fillSheetSettings(st);
 }
+
+/* ---------- 설정 탭: 악보 ---------- */
+function fillSheetSettings(st){
+  setSheetConfig(st);
+  $('#sheetState').textContent = st.sheetFolderId ? (st.sheetFolderName || '폴더 선택됨') : '폴더 없음';
+  $('#sheetState').className = 'badge' + (st.sheetFolderId ? ' on' : '');
+  $('#pickerWarn').hidden = !!st.pickerKey;
+  $('#syncIndex').disabled = !st.sheetFolderId;
+  $('#sheetMeta').textContent = st.sheetFolderId
+    ? (st.driveIndexAt
+        ? `악보 ${st.driveIndexCount}개 · 목록을 ${fmtWhen(st.driveIndexAt)}에 읽었어요.`
+        : '아직 목록을 읽지 않았어요. ‘목록 새로 읽기’를 눌러 주세요.')
+    : '드라이브에서 악보 폴더를 고르면 세트리스트에 악보를 붙일 수 있어요.';
+  renderPending(st.sheetPending || 0);
+}
+
+let pendingItems = [];
+
+async function renderPending(count){
+  const box = $('#pendingList');
+  if(!count){ box.innerHTML = ''; pendingItems = []; return; }
+  try{ pendingItems = (await api('/api/sheets/pending')).items; }
+  catch(e){ box.innerHTML = ''; return; }
+  box.innerHTML = `
+    <div class="mrow" style="border-top:1px solid var(--line);margin-top:10px">
+      <div class="mi">
+        <div class="me">드라이브에 올릴 악보 ${pendingItems.length}개</div>
+        <div class="mm">${esc(pendingItems.map(s => s.title).join(', ')).slice(0, 200)}</div>
+      </div>
+      <button class="ghost" id="pushPending">지금 올리기</button>
+    </div>`;
+  $('#pushPending').onclick = pushPending;
+}
+
+/* 팀원이 올려 서버에만 있는 악보를 드라이브로 보낸다(브라우저가 올리고 서버에 알려 준다). */
+async function pushPending(){
+  const btn = $('#pushPending'), msg = $('#sheetMsg');
+  const cfg = await sheetConfig();
+  msg.className = 'msg';
+  if(!cfg.folderId){ msg.className = 'msg err'; msg.textContent = '먼저 악보 폴더를 골라 주세요.'; return; }
+  btn.disabled = true;
+  let ok = 0;
+  try{
+    for(const s of pendingItems){
+      msg.textContent = `${s.title} 올리는 중… (${ok + 1}/${pendingItems.length})`;
+      const res = await fetch(`/api/sheets/${s.id}/file`, {credentials: 'same-origin'});
+      if(!res.ok) throw new Error(`${s.title}의 악보 파일을 읽지 못했어요.`);
+      const up = await driveUpload(cfg.folderId, s.name || s.title, await res.blob());
+      await api(`/api/sheets/${s.id}/drive`, {method: 'POST', body: {driveFileId: up.id, driveName: up.name}});
+      ok++;
+    }
+    msg.textContent = `${ok}개를 드라이브에 올렸어요.`;
+  }catch(e){ msg.className = 'msg err'; msg.textContent = `${ok}개까지 올렸어요. ${e.message}`; }
+  finally{
+    btn.disabled = false;
+    try{ fillSheetSettings(await api('/api/settings')); }catch(_){}
+  }
+}
+
+$('#pickFolder').onclick = async e => {
+  const btn = e.currentTarget, msg = $('#sheetMsg');
+  btn.disabled = true; msg.className = 'msg'; msg.textContent = '';
+  try{
+    const doc = await pickFolder();
+    if(doc){
+      fillSheetSettings(await api('/api/settings', {method: 'PUT',
+        body: {sheetFolderId: doc.id, sheetFolderName: doc.name || ''}}));
+      msg.textContent = '폴더를 골랐어요. 이어서 목록을 읽어요…';
+      await syncIndex();
+    }
+  }catch(err){ msg.className = 'msg err'; msg.textContent = err.message; }
+  finally{ btn.disabled = false; }
+};
+
+async function syncIndex(){
+  const msg = $('#sheetMsg');
+  const cfg = await sheetConfig();
+  if(!cfg.folderId) throw new Error('먼저 악보 폴더를 골라 주세요.');
+  msg.className = 'msg'; msg.textContent = '드라이브 목록을 읽는 중…';
+  const files = await driveList(cfg.folderId);
+  const r = await api('/api/drive/index', {method: 'PUT', body: {files}});
+  fillSheetSettings(await api('/api/settings'));
+  msg.className = 'msg'; msg.textContent = `악보 ${r.count}개를 읽었어요.`;
+  if(!r.count) msg.textContent = '그 폴더에서 파일을 찾지 못했어요. 폴더를 다시 골라 주세요.';
+}
+
+$('#syncIndex').onclick = async e => {
+  const btn = e.currentTarget, msg = $('#sheetMsg');
+  btn.disabled = true;
+  try{ await syncIndex(); }
+  catch(err){ msg.className = 'msg err'; msg.textContent = err.message; }
+  finally{ btn.disabled = false; }
+};
 
 function renderMembers(list){
   const box = $('#memberList');

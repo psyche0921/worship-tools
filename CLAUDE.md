@@ -11,6 +11,8 @@
 
 **v2 설계는 `docs/v2-design.md`에 확정되어 있습니다.** 배포 대상은 170번 서버(`tstech@192.168.0.170`), 주소는 `https://bbc.ppsoft.kr`입니다. 팀원은 쇼츠 기획만 쓰고, 세트리스트는 관리자만 씁니다.
 
+**악보 관리(세트리스트 ↔ 구글 드라이브) 설계는 `docs/sheets-design.md`에 있고 구현했습니다. 그 악보를 drdr 채보 학습의 정답지로 쓰는 설계는 `docs/drdr-training.md`에 있고, 무거운 쪽은 drdr 저장소 작업입니다.**
+
 ## v2 구조 (`v2` 브랜치, bbc.ppsoft.kr)
 
 - `server/app/`: FastAPI + SQLite. `auth.py`(Google ID 토큰 → 세션, `require_admin`), `jobs.py`(Gemini 백그라운드 작업), `gemini.py`(프롬프트, v1 문구 그대로), `routes/shorts.py`(팀원도 사용), `routes/records.py`(작업 기록 보기, 팀원도 사용), `routes/admin.py`(관리자 전용).
@@ -30,6 +32,19 @@
 - 스마트폰에서 '앱 설치'가 뜨려면 `web/manifest.webmanifest`와 `web/sw.js`(서비스 워커)가 둘 다 있어야 합니다. 서비스 워커는 **네트워크 우선**이라 배포하면 바로 새 화면이 보입니다. `/api/`와 `/auth/`는 캐시하지 않습니다.
 - `.webmanifest` 타입은 `server/app/main.py`에서 `mimetypes.add_type`으로 등록합니다(파이썬 기본 목록에 없어서 빼면 브라우저가 설치 설정을 읽지 않습니다).
 - 설치 단추(`#installBtn`)는 `beforeinstallprompt`가 올 때만 보입니다(안드로이드 크롬). 아이폰은 사파리 '공유 > 홈 화면에 추가'입니다.
+
+## 악보 (v2)
+
+- **서버는 구글 드라이브를 부르지 않습니다.** OAuth 동의 화면이 '테스트' 상태라 refresh token이 7일 뒤 만료되기 때문입니다. 관리자 브라우저가 드라이브를 읽고 쓰고(`drive.file` 범위, Picker로 고른 악보 폴더), 서버는 **악보 사본(`/data/sheets`)과 곡↔악보 매핑만** 보관합니다. 새 드라이브 기능을 넣을 때도 이 선을 지키세요.
+- 곡 키는 `app/sheets.py`의 `song_key()`입니다. 괄호 안·확장자를 떼고 공백과 기호를 모두 지웁니다. 그래서 `새 힘 얻으리`와 `새힘얻으리`가 같은 곡이 됩니다.
+- **메들리는 곡마다 악보가 하나입니다.** `split_songs()`가 `&`, `+`, ` / `로 쪼갭니다(`나로부터 & 기대` → 2곡). 조각이 2글자보다 짧으면 쪼개지 않습니다(`R&B`).
+- 파일 이름에 규칙이 없으니 ① 이미 매핑된 곡 ② 드라이브 목록 캐시(`drive_index`)에서 이름에 곡 키가 **들어 있는** 파일 ③ `difflib` 유사도 상위 5개 순서로 찾습니다. 사람이 고르면 그 파일 이름을 `sheet_aliases`에 남겨 다음에도 걸립니다.
+- 기록을 읽을 때 저장된 `sheetId`가 없으면 **곡 제목으로 지금 매핑을 찾습니다**(`resolve_songs`, `auto: true`). 그래서 악보를 나중에 올려도 그 곡이 나왔던 지난 주 기록에 바로 보입니다.
+- 팀원도 악보를 받고 올릴 수 있습니다. 팀원이 올린 것은 서버에만 두고(`sync='pending'`) 관리자가 설정 탭에서 드라이브로 보냅니다. **드라이브 연결(`driveFileId`)은 관리자만** 할 수 있습니다(서버에서 검사).
+- 악보를 지워도 **드라이브 원본은 지우지 않습니다**. 매핑과 서버 사본만 지웁니다.
+- 올릴 수 있는 형식은 앞머리 바이트로 가립니다(PDF·PNG·JPEG). 클라이언트가 말한 타입을 믿지 않습니다.
+- `GOOGLE_PICKER_KEY`는 관리자만 보는 `/api/settings`로 내려줍니다. 공개인 `/api/config`에 넣지 마세요.
+- `tools/check-sheets.py`는 악보 PDF가 프로그램 PDF인지 스캔인지 세어 봅니다(drdr 학습 1단계 비용 가늠용, `pip install pymupdf`).
 
 ## 자동 쇼츠 기획 (v2)
 

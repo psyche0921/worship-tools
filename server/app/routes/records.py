@@ -11,6 +11,7 @@ from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from .. import sheets
 from ..auth import current_user, get_db
 from ..jobs import KST
 from .admin import setlist_item
@@ -142,9 +143,13 @@ def _setlists(db: sqlite3.Connection, toks: list[dict], user: dict) -> list[dict
         names = [s.get('name') or '' for s in songs]
         notes = [n for s in songs for n in (s.get('notes') or [])]
         dates = _dates('setlist', r['title'], r['created_at'])
+        # 악보가 몇 곡에 붙었는지(메들리는 곡마다 하나씩 세므로 split_songs 기준).
+        units = sum(len(sheets.split_songs(n)) for n in names if n)
+        linked = sheets.count_linked(db, songs)
         out.append({'kind': 'setlist', 'key': r['playlist_id'], 'title': r['title'], 'url': r['url'],
                     'at': r['created_at'], 'ok': r['ok'], 'total': r['total'],
                     'songs': [s for s in names if s][:30],
+                    'sheetsLinked': linked, 'sheetsTotal': units,
                     'canDelete': user['role'] == 'admin', **dates,
                     '_where': _match_where(toks, [('제목', r['title']), ('곡 제목', ' / '.join(names)),
                                                   ('곡 메모', ' / '.join(notes))], [], dates)})
@@ -248,6 +253,6 @@ def record_setlist(key: str, user: dict = Depends(current_user), db: sqlite3.Con
     row = db.execute('SELECT * FROM setlists WHERE playlist_id = ?', (key,)).fetchone()
     if not row:
         raise HTTPException(404, '기록을 찾을 수 없어요.')
-    item = setlist_item(row, with_raw=user['role'] == 'admin')
+    item = setlist_item(row, with_raw=user['role'] == 'admin', db=db)
     item['canDelete'] = user['role'] == 'admin'
     return item | _dates('setlist', row['title'], row['created_at'])

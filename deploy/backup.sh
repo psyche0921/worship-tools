@@ -13,4 +13,13 @@ src.backup(dst)
 dst.close(); src.close()
 " </dev/null
 find data/backups -name 'worship-*.db' -mtime +14 -delete
-echo "$(date '+%F %T') 백업 완료: data/backups/$name"
+
+# 악보 사본. 원본은 구글 드라이브에 있지만 '드라이브 대기'(팀원이 올린 것)는 서버에만 있다.
+sheets=''
+if [ -d data/sheets ]; then
+  sheets="sheets-$(date +%F).tgz"
+  tar -czf "data/backups/$sheets" -C data sheets
+  find data/backups -name 'sheets-*.tgz' -mtime +14 -delete
+  sheets=" · data/backups/$sheets"
+fi
+echo "$(date '+%F %T') 백업 완료: data/backups/$name$sheets"

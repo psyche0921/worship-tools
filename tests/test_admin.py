@@ -6,8 +6,8 @@ import pytest
 from conftest import ADMIN, MEMBER, login
 
 PID = 'PLabcdefghijklmnop'
-SONGS = [{'id': 'dQw4w9WgXcQ', 'name': '주의 은혜라', 'notes': ['KEY - A', 'TEMPO - 106']},
-         {'id': 'aaaaaaaaaaa', 'name': '', 'notes': []}]
+SONGS = [{'id': 'dQw4w9WgXcQ', 'name': '주의 은혜라', 'notes': ['KEY - A', 'TEMPO - 106'], 'sheets': []},
+         {'id': 'aaaaaaaaaaa', 'name': '', 'notes': [], 'sheets': []}]
 
 
 def setlist_body(**kw):
@@ -38,10 +38,16 @@ def test_admin_only_endpoints(client, add_member, method, url, body):
 
 # ---------- 세트리스트 ----------
 
+def stored(songs):
+    """서버가 상세에 덧붙이는 악보 정보(sheets·needSheets)를 빼고 저장된 값만 본다."""
+    return [{k: s[k] for k in ('id', 'name', 'notes')} for s in songs]
+
+
 def test_setlist_save_list_get_delete(client):
     login(client, ADMIN)
     saved = client.post('/api/setlists', json=setlist_body()).json()
-    assert saved['key'] == PID and saved['songs'] == SONGS and saved['rawMessage'].startswith('Setlist')
+    assert saved['key'] == PID and saved['rawMessage'].startswith('Setlist')
+    assert stored(saved['songs']) == stored(SONGS)
     items = client.get('/api/setlists').json()['items']
     assert len(items) == 1 and items[0]['title'] == 'Setlist 261018' and 'rawMessage' not in items[0]
     assert client.delete(f'/api/setlists/{PID}').status_code == 200

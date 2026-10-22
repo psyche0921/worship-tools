@@ -93,6 +93,41 @@ MIGRATIONS = [
     ALTER TABLE shorts DROP COLUMN transcript_status;
     ALTER TABLE shorts DROP COLUMN transcript_error;
     """,
+    # 악보. 서버는 구글 드라이브를 직접 부르지 않고(docs/sheets-design.md 1장) 사본과 매핑만 둔다.
+    # drive_index는 관리자 브라우저가 읽어 보내 준 악보 폴더의 파일 목록 캐시다.
+    """
+    CREATE TABLE sheets (
+      id INTEGER PRIMARY KEY,
+      song_key TEXT NOT NULL UNIQUE,
+      title TEXT NOT NULL,
+      drive_file_id TEXT NOT NULL DEFAULT '',
+      drive_name TEXT NOT NULL DEFAULT '',
+      mime TEXT NOT NULL DEFAULT '',
+      size INTEGER NOT NULL DEFAULT 0,
+      file_path TEXT NOT NULL DEFAULT '',
+      sync TEXT NOT NULL DEFAULT 'drive' CHECK (sync IN ('drive', 'pending', 'error')),
+      sync_error TEXT,
+      created_by TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX sheets_title ON sheets(title);
+    CREATE TABLE sheet_aliases (
+      alias_key TEXT PRIMARY KEY,
+      sheet_id INTEGER NOT NULL REFERENCES sheets(id) ON DELETE CASCADE
+    );
+    CREATE INDEX sheet_aliases_sheet ON sheet_aliases(sheet_id);
+    CREATE TABLE drive_index (
+      file_id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      name_key TEXT NOT NULL,
+      mime TEXT NOT NULL DEFAULT '',
+      size INTEGER NOT NULL DEFAULT 0,
+      modified_at INTEGER NOT NULL DEFAULT 0,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX drive_index_key ON drive_index(name_key);
+    """,
 ]
 
 

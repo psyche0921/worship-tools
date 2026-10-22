@@ -1,5 +1,7 @@
 fastapi==0.146.0
 uvicorn==0.54.0
+# 악보 파일 업로드(multipart)
+python-multipart==0.0.20
 google-auth==2.62.0
 requests==2.34.2
 httpx==0.28.1

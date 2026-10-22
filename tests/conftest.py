@@ -35,7 +35,9 @@ def fake_verifier(credential: str, client_id: str) -> dict:
 def settings(tmp_path):
     return Settings(
         db_path=str(tmp_path / 'worship.db'),
+        sheets_dir=str(tmp_path / 'sheets'),
         google_client_id=CLIENT_ID,
+        google_picker_key='picker-key',
         admin_emails=[ADMIN],
         public_origin=ORIGIN,
     )
