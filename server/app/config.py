@@ -12,7 +12,7 @@ class Settings:
     db_path: str = '/data/worship.db'
     sheets_dir: str = '/data/sheets'
     google_client_id: str = ''
-    max_sheet_mb: int = 9
+    max_sheet_mb: int = 20
     admin_emails: list[str] = field(default_factory=list)
     public_origin: str = 'https://bbc.ppsoft.kr'
     default_model: str = 'gemini-3.8-flash'
