@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from ..auth import get_db, get_settings, require_admin
-from .. import sheets, youtube
+from .. import youtube
 from ..auto import AUTO_EMAIL, last_run
 from ..config import Settings
 from ..db import get_setting, now_ms, set_setting
@@ -43,8 +43,6 @@ def read_settings(db: sqlite3.Connection = Depends(get_db), settings: Settings =
         'autoEnabled': (get_setting(db, 'auto_enabled') or '') == '1',
         'autoLast': last_run(db),
         'youtubeKeySet': bool(settings.youtube_api_key),
-        # 악보: 드라이브에서 가져올 것이 남았는지(한시적). 다 옮기면 0이 되고 카드가 사라진다.
-        'driveIndexCount': sheets.index_count(db),
         'maxSheetMb': settings.max_sheet_mb,
     }
 

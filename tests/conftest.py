@@ -37,8 +37,6 @@ def settings(tmp_path):
         db_path=str(tmp_path / 'worship.db'),
         sheets_dir=str(tmp_path / 'sheets'),
         google_client_id=CLIENT_ID,
-        google_picker_key='picker-key',
-        google_picker_app_id='123456789',
         admin_emails=[ADMIN],
         public_origin=ORIGIN,
     )

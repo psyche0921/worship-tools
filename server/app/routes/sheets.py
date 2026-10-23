@@ -1,7 +1,6 @@
 """악보 API.
 
-악보는 **서버에 바로 올립니다**(구글 드라이브 연동은 뗐습니다 — `docs/setlist-share.md` 6장).
-팀원도 올리고 받을 수 있습니다.
+악보는 **서버에 바로 올립니다**(`docs/setlist-share.md` 6장). 팀원도 올리고 받을 수 있습니다.
 
 공유 페이지용 경로(`/api/share/...`)는 **로그인 없이 누구나** 쓸 수 있습니다. 추측
 불가능한 공유 토큰이 유일한 자물쇠이고, 그 세트리스트에 붙은 악보만 내려줍니다
@@ -21,13 +20,12 @@ from pydantic import BaseModel, Field
 from .. import sheets as sh
 from ..auth import current_user, get_db, get_settings, require_admin
 from ..config import Settings
-from ..db import now_ms, set_setting
+from ..db import now_ms
 from .records import service_date
 
 router = APIRouter(prefix='/api')
 
 MAX_NAMES = 200
-MAX_INDEX = 20000
 
 
 # ---------- 곡 ↔ 악보 맞추기 ----------
@@ -88,11 +86,11 @@ def put_sheet(title: str = Form(max_length=300), file: UploadFile = File(),
         if old is not None:
             sheet_id = int(old['id'])
             db.execute(
-                'UPDATE sheets SET title = ?, drive_name = ?, mime = ?, size = ?, updated_at = ? '
+                'UPDATE sheets SET title = ?, file_name = ?, mime = ?, size = ?, updated_at = ? '
                 'WHERE id = ?', (title.strip(), name, mime, len(data), now, sheet_id))
         else:
             cur = db.execute(
-                'INSERT INTO sheets (song_key, title, drive_name, mime, size, created_by, '
+                'INSERT INTO sheets (song_key, title, file_name, mime, size, created_by, '
                 'created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
                 (key, title.strip(), name, mime, len(data), user['email'], now, now))
             sheet_id = int(cur.lastrowid)
@@ -224,53 +222,3 @@ def share_sheet(token: str, sheet_id: int, db: sqlite3.Connection = Depends(get_
 @router.get('/share/{token}/sheets.zip')
 def share_zip(token: str, db: sqlite3.Connection = Depends(get_db)):
     return _zip(*setlist_sheets(db, token))
-
-
-# ---------- 드라이브에서 가져오기 (한 번만 쓰고 지운다) ----------
-
-class DriveFile(BaseModel):
-    id: str = Field(max_length=100)
-    name: str = Field(max_length=300)
-    mimeType: str = Field('', max_length=120)
-    size: int | str | None = None
-    modifiedTime: str | None = Field(None, max_length=40)
-
-
-class IndexIn(BaseModel):
-    files: list[DriveFile] = Field(default_factory=list, max_length=MAX_INDEX)
-    replace: bool = False
-
-
-@router.put('/drive/index')
-def put_index(body: IndexIn, user: dict = Depends(require_admin),
-              db: sqlite3.Connection = Depends(get_db)):
-    """관리자가 Picker에서 고른 드라이브 악보 목록. **가져오기가 끝나면 이 경로는 없앤다.**"""
-    now = now_ms()
-    rows, seen = [], set()
-    for f in body.files:
-        if f.mimeType.startswith('application/vnd.google-apps') or f.id in seen:
-            continue
-        seen.add(f.id)
-        rows.append((f.id, f.name, sh.song_key(f.name), f.mimeType,
-                     sh.as_int(f.size), sh.as_ms(f.modifiedTime), now))
-    with db:
-        if body.replace:
-            db.execute('DELETE FROM drive_index')
-        db.executemany(
-            'INSERT OR REPLACE INTO drive_index '
-            '(file_id, name, name_key, mime, size, modified_at, updated_at) '
-            'VALUES (?, ?, ?, ?, ?, ?, ?)', rows)
-        set_setting(db, 'drive_index_at', str(now), user['email'])
-    return {'added': len(rows), 'count': sh.index_count(db), 'at': now}
-
-
-@router.get('/drive/todo')
-def drive_todo(user: dict = Depends(require_admin), db: sqlite3.Connection = Depends(get_db)):
-    """아직 서버로 가져오지 않은 드라이브 악보. 브라우저가 이것을 보고 하나씩 옮긴다."""
-    rows = db.execute(
-        'SELECT d.file_id, d.name, d.mime, d.size FROM drive_index d '
-        'LEFT JOIN sheets s ON s.song_key = d.name_key '
-        'WHERE s.id IS NULL ORDER BY d.name').fetchall()
-    return {'items': [{'driveFileId': r['file_id'], 'name': r['name'], 'mime': r['mime'],
-                       'size': r['size']} for r in rows],
-            'total': sh.index_count(db)}

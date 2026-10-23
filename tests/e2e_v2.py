@@ -45,14 +45,7 @@ FAKE_GSI = """window.google={accounts:{
  id:{initialize(o){window.__gsiCb=o.callback},
      renderButton(el){el.innerHTML='<button id="fakeGsi">Google로 로그인</button>';
        el.querySelector('button').onclick=()=>window.__gsiCb({credential:window.__cred})},
-     disableAutoSelect(){}},
- oauth2:{initTokenClient:(o)=>{
-   // youtube와 drive.file은 한 번에 요청할 수 없다(400 invalid_request). 범위마다 따로 받아야 한다.
-   if(String(o.scope).trim().split(/\\s+/).length>1) throw new Error('범위를 한꺼번에 요청했어요: '+o.scope);
-   if(o.include_granted_scopes!==false) throw new Error('include_granted_scopes를 꺼야 해요');
-   window.__scopes=(window.__scopes||[]).concat(o.scope);
-   const c={callback:o.callback,
-   requestAccessToken(){setTimeout(()=>c.callback({access_token:'tok',expires_in:3600}),10)}};return c;}}}};"""
+     disableAutoSelect(){}},}};"""
 
 
 # 유튜브 IFrame 플레이어 흉내. 재생목록을 만들지 않고 영상 ID 배열을 큐에 넣는지 본다.
@@ -68,32 +61,23 @@ FAKE_YT = """window.YT={Player:class{
 }};
 if(window.onYouTubeIframeAPIReady) window.onYouTubeIframeAPIReady();"""
 
-# 드라이브에 들어 있는 것으로 가정하는 악보들(이름 규칙이 없는 상황을 흉내 낸다).
-# '한 번만 쓰는 가져오기'가 이 목록을 보고 서버로 옮긴다.
-DRIVE_FILES = [
-    {'id': 'd1', 'name': '01_새 힘 얻으리_A.pdf', 'mimeType': 'application/pdf',
-     'size': '2048', 'modifiedTime': '2026-10-01T03:04:05.000Z'},
-    {'id': 'd2', 'name': '나로부터.pdf', 'mimeType': 'application/pdf',
-     'size': '2048', 'modifiedTime': '2026-10-01T03:04:05.000Z'},
-    {'id': 'd3', 'name': '기대 (G).pdf', 'mimeType': 'application/pdf',
-     'size': '2048', 'modifiedTime': '2026-10-01T03:04:05.000Z'},
-]
+# 예전에 쓰던 악보들(파일 이름에 규칙이 없는 상황을 흉내 낸다).
+OLD_SHEETS = ['01_새 힘 얻으리_A.pdf', '나로부터.pdf', '기대 (G).pdf']
+# 악보를 API로 올리는 스크립트(파일 이름에서 제목을 딴다).
+SEED_SHEETS = """async (names) => {
+  const out = [];
+  for(const name of names){
+    const fd = new FormData();
+    fd.append('title', name.replace(/[.]pdf$/, ''));
+    fd.append('fileName', name);
+    fd.append('file', new Blob(['%PDF-1.4 e2e'], {type: 'application/pdf'}), name);
+    const r = await fetch('/api/sheets', {method: 'POST', body: fd});
+    out.push(r.status);
+  }
+  return out;
+}"""
+
 FAKE_PDF = b'%PDF-1.4\n% e2e fake sheet\n'
-
-
-def drive_route(downloads):
-    """드라이브 API 흉내: 악보를 서버로 옮길 때 쓰는 **내려받기만** 남았다.
-
-    올리기·목록 읽기는 쓰지 않는다(악보는 서버에 바로 올린다). 그 길로 요청이 가면 바로 실패한다.
-    """
-    def handle(route):
-        url = route.request.url
-        if 'alt=media' in url:
-            downloads.append(url)
-            route.fulfill(status=200, content_type='application/pdf', body=FAKE_PDF)
-        else:
-            raise AssertionError('드라이브에 쓸 일이 없는데 호출했어요: ' + url)
-    return handle
 
 
 def fake_verifier(credential, client_id):
@@ -131,7 +115,6 @@ def start_v2(db_path, gem):
     port = free_port()
     settings = Settings(db_path=db_path, sheets_dir=str(pathlib.Path(db_path).parent / 'sheets'),
                         google_client_id='test.apps.googleusercontent.com',
-                        google_picker_key='picker-key', google_picker_app_id='123456789',
                         admin_emails=[ADMIN], public_origin=f'http://127.0.0.1:{port}')
     app = create_app(settings, verify_token=fake_verifier, gemini_call=gem)
     server = uvicorn.Server(uvicorn.Config(app, host='127.0.0.1', port=port, log_level='warning'))
@@ -141,13 +124,12 @@ def start_v2(db_path, gem):
     return server, f'http://127.0.0.1:{port}'
 
 
-def new_page(browser, cred, errors, downloads=None):
+def new_page(browser, cred, errors):
     ctx = browser.new_context(viewport={'width': 390, 'height': 844}, accept_downloads=True)
     ctx.add_init_script(f'window.__cred = {json.dumps(cred)};')
     pg = ctx.new_page()
     pg.on('pageerror', lambda e: errors.append(str(e)))
     pg.route('**/accounts.google.com/**', lambda r: r.fulfill(status=200, content_type='text/javascript', body=FAKE_GSI))
-    pg.route('**/www.googleapis.com/**', drive_route(downloads if downloads is not None else []))
     pg.route('**/i.ytimg.com/**', lambda r: r.abort())
     pg.route('**/generativelanguage.googleapis.com/**', lambda r: r.abort())  # 브라우저는 Gemini를 부르면 안 됨
     return ctx, pg
@@ -169,7 +151,7 @@ def main():
     tmp = tempfile.mkdtemp()
     gem = FakeGemini()
     server, base = start_v2(str(pathlib.Path(tmp) / 'worship.db'), gem)
-    errors, downloads = [], []
+    errors = []
     sheet_pdf = pathlib.Path(tmp) / 'upload.pdf'
     sheet_pdf.write_bytes(FAKE_PDF)
 
@@ -186,7 +168,7 @@ def main():
         ctx.close()
 
         # ---------- 관리자 ----------
-        ctx, pg = new_page(browser, f'ok:{ADMIN}', errors, downloads)
+        ctx, pg = new_page(browser, f'ok:{ADMIN}', errors)
         login(pg, base)
         assert '관리자' in pg.inner_text('#whoami')
         assert pg.is_visible('#tabs') and pg.is_visible('#tab-setlist')
@@ -220,28 +202,9 @@ def main():
         pg.wait_for_function("document.querySelectorAll('#memberList .mrow').length === 2")
         assert pg.locator('#memberList .mrow').nth(0).locator('button').count() == 0  # 관리자는 삭제 버튼 없음
 
-        # ---------- 악보: 드라이브에서 한 번만 가져오기 ----------
-        # drive_index에 들어 있는 것을 브라우저가 받아 서버로 옮긴다(한시적 기능).
-        seeded = pg.evaluate("""async (files) => {
-            const r = await fetch('/api/drive/index', {method: 'PUT',
-              headers: {'Content-Type': 'application/json'}, body: JSON.stringify({files})});
-            return (await r.json()).count; }""", DRIVE_FILES)
-        assert seeded == 3, seeded
-        pg.reload()
-        pg.wait_for_selector('#app:not([hidden])')
-        pg.click('.tabs button[data-tab=admin]')
-        pg.wait_for_function("document.querySelector('#sheetState').textContent === '3개 남음'",
-                             timeout=15000)
-        pg.click('#importDrive')
-        pg.wait_for_function(
-            "document.querySelector('#sheetMsg').textContent.includes('3개를 모두 서버로 옮겼어요')",
-            timeout=30000)
-        # 상태 뱃지는 가져오기가 끝난 뒤 다시 읽어서 바뀐다
-        pg.wait_for_function("document.querySelector('#sheetState').textContent === '모두 옮겼어요'",
-                             timeout=15000)
-        assert len(downloads) == 3, downloads
-        # 악보는 drive.file 토큰만 받는다. youtube 범위는 더 쓰지 않는다.
-        assert pg.evaluate('window.__scopes') == ['https://www.googleapis.com/auth/drive.file']
+        # ---------- 악보를 미리 올려 둔다(예전에 쓰던 악보들) ----------
+        made = pg.evaluate(SEED_SHEETS, OLD_SHEETS)
+        assert made == [200] * 3, made
         got = api(pg, '/api/sheets')['body']['items']
         assert sorted(s['title'] for s in got) == ['01_새 힘 얻으리_A', '기대 (G)', '나로부터']
 
@@ -271,13 +234,11 @@ def main():
         assert pg.locator('#sh-2-1 .sh-t').all_inner_texts() == ['나로부터', '기대']
         assert pg.locator('#sh-2-1 .sh-n.ok').count() == 2
 
-        # 악보가 없는 곡은 서버로 바로 올린다(드라이브를 부르지 않는다)
-        before = len(downloads)
+        # 악보가 없는 곡은 서버로 바로 올린다
         with pg.expect_file_chooser() as fc:
             pg.click('#sh-0-0 .up')
         fc.value.set_files(str(sheet_pdf))
         pg.wait_for_selector('#sh-0-0 .sh-n.ok')
-        assert len(downloads) == before   # 드라이브 호출이 늘지 않았다
 
         # 맞는 악보가 없는 곡은 '올리기'만 보인다
         pg.wait_for_selector('#sh-0-1 .sh')
@@ -503,7 +464,7 @@ def main():
         assert pg.locator('.tabs button:visible').all_inner_texts() == ['세트리스트', '쇼츠 기획', '작업 기록']
         # 세트리스트는 팀원도 쓴다(구글 연동이 없어졌다). 설정·팀원은 그대로 관리자 전용.
         assert api(pg, '/api/setlists')['status'] == 200
-        for path in ('/api/settings', '/api/members', '/api/drive/todo'):
+        for path in ('/api/settings', '/api/members'):
             assert api(pg, path)['status'] == 403, path
 
         # 팀원도 작업 기록을 본다. 세트리스트 기록도 열 수 있지만(그 주 찬양 확인) 지우지는 못한다.

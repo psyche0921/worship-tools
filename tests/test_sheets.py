@@ -1,5 +1,4 @@
 """악보: 곡 제목 정규화, 메들리 분리, 후보 찾기, 올리기·받기·zip, 권한."""
-import hashlib
 import io
 import json
 import pathlib
@@ -56,15 +55,6 @@ def test_split_songs(name, parts):
 
 
 # ---------- 후보 찾기 (이미 올라온 악보에서) ----------
-
-def index(client, *names):
-    """드라이브에서 가져올 목록(한시적). 파일 ID는 이름마다 하나로 정한다."""
-    files = [{'id': 'drive-' + hashlib.sha1(n.encode()).hexdigest()[:12], 'name': n,
-              'mimeType': 'application/pdf', 'size': '12345',
-              'modifiedTime': '2026-10-01T03:04:05.000Z'} for n in names]
-    files.append({'id': 'folder1', 'name': '지난 주', 'mimeType': 'application/vnd.google-apps.folder'})
-    return client.put('/api/drive/index', json={'files': files})
-
 
 def test_same_song_again_attaches_by_itself(client):
     """이미 했던 곡이 다시 나오면 띄어쓰기가 달라도 그대로 붙는다."""
@@ -262,11 +252,7 @@ def test_deleted_sheet_shows_as_missing(client):
 
 # ---------- 권한 ----------
 
-ADMIN_ONLY = [
-    ('put', '/api/drive/index', {'files': []}),
-    ('get', '/api/drive/todo', None),
-    ('delete', '/api/sheets/1', None),
-]
+ADMIN_ONLY = [('delete', '/api/sheets/1', None)]
 
 
 @pytest.mark.parametrize('method, url, body', ADMIN_ONLY)
@@ -288,23 +274,3 @@ def test_member_allowed(client, add_member, method, url, body):
     add_member()
     login(client, MEMBER)
     assert client.request(method, url, **kw).status_code == 200
-
-
-# ---------- 드라이브에서 가져오기 (한 번만) ----------
-
-def test_drive_todo_shrinks_as_sheets_arrive(client):
-    login(client, ADMIN)
-    assert index(client, '주의 은혜라.pdf', '은혜.pdf').json()['count'] == 2  # 폴더는 빠진다
-    todo = client.get('/api/drive/todo').json()
-    assert [t['name'] for t in todo['items']] == ['은혜.pdf', '주의 은혜라.pdf'] and todo['total'] == 2
-    upload(client, '주의 은혜라')
-    todo = client.get('/api/drive/todo').json()
-    assert [t['name'] for t in todo['items']] == ['은혜.pdf']
-    assert client.get('/api/settings').json()['driveIndexCount'] == 2
-
-
-def test_drive_index_adds_without_wiping(client):
-    login(client, ADMIN)
-    assert index(client, '주의 은혜라.pdf').json()['count'] == 1
-    assert index(client, '하나만.pdf').json()['count'] == 2
-    assert index(client, '하나만.pdf').json()['count'] == 2   # 같은 파일은 늘지 않는다

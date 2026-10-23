@@ -52,7 +52,8 @@
 - 기록을 읽을 때 저장된 `sheetId`가 없으면 곡 제목으로 지금 악보를 찾습니다(`resolve_songs`, `auto: true`). 그래서 악보를 나중에 올려도 그 곡이 나왔던 지난 주 기록에 바로 보입니다. 아직 없는 곡은 `needSheets`로 알려 줍니다.
 - 팀원도 올리고 받습니다. 삭제는 관리자만.
 - 올릴 수 있는 형식은 **앞머리 바이트로** 가립니다(PDF·PNG·JPEG). 클라이언트가 말한 타입을 믿지 않습니다.
-- `설정 탭 > 드라이브 악보 가져오기`는 **한시적**입니다. 예전에 드라이브에 모아 둔 악보를 서버로 옮기는 용도이고(`GET /api/drive/todo` + `PUT /api/drive/index`), 다 옮기면 카드가 사라집니다. **그 뒤에 이 코드와 `drive_index` 표, `GOOGLE_PICKER_*` 설정을 지우세요.**
+- **크기 한도는 두 곳에 있습니다.** `MAX_SHEET_MB`(기본 9)와 nginx의 `client_max_body_size`(10m). 앱 값이 더 크면 nginx가 먼저 413을 내서 앱의 안내가 나오지 않습니다. 둘을 함께 올리세요(nginx는 sudo).
+- 구글 드라이브 연동은 **2026-10-23에 완전히 제거했습니다**(악보 111개를 서버로 옮긴 뒤). `drive_index` 표, Picker 설정, 브라우저 OAuth 토큰 코드가 모두 없어졌습니다. 로그인은 Google **ID 토큰**만 씁니다(`google.accounts.id`).
 - `tools/check-sheets.py`는 악보 PDF가 프로그램 PDF인지 스캔인지 세어 봅니다(drdr 학습 1단계 비용 가늠용, `pip install pymupdf`).
 
 ## 자동 쇼츠 기획 (v2)

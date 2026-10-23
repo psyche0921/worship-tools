@@ -1,9 +1,7 @@
-"""악보: 곡 제목 정규화, 메들리 분리, 드라이브 파일 후보 찾기, 사본 보관.
+"""악보: 곡 제목 정규화, 메들리 분리, 후보 찾기, 파일 보관.
 
-서버는 구글 드라이브를 직접 부르지 않는다. OAuth 동의 화면이 '테스트' 상태라
-refresh token이 7일 뒤 만료되기 때문이다(docs/sheets-design.md 1장). 대신 관리자
-브라우저가 드라이브를 읽어 목록을 PUT /api/drive/index로 올려 주고, 서버는 그
-캐시(drive_index)에서 후보를 찾고 악보 사본만 보관한다.
+악보는 서버에 직접 올린다(docs/setlist-share.md 6장). 같은 곡이 다시 나오면 곡
+제목으로 저절로 붙고, 제목이 조금 다르면 **이미 올라온 악보**를 후보로 보여 준다.
 """
 import difflib
 import os
@@ -76,18 +74,18 @@ def find_sheet(db: sqlite3.Connection, key: str) -> sqlite3.Row | None:
 def sheet_dict(row: sqlite3.Row) -> dict:
     return {
         'id': row['id'], 'title': row['title'], 'songKey': row['song_key'],
-        'name': row['drive_name'] or (row['title'] + EXT_OF.get(row['mime'], '')),
+        'name': row['file_name'] or (row['title'] + EXT_OF.get(row['mime'], '')),
         'mime': row['mime'], 'size': row['size'],
         'hasFile': bool(row['file_path']), 'at': row['updated_at'], 'by': row['created_by'],
     }
 
 
-SHEET_COLS = 'id, title, song_key, drive_name, mime, size, file_path, updated_at FROM sheets'
+SHEET_COLS = 'id, title, song_key, file_name, mime, size, file_path, updated_at FROM sheets'
 
 
 def _cand(row: sqlite3.Row, score: float) -> dict:
     return {'sheetId': row['id'], 'title': row['title'],
-            'name': row['drive_name'] or (row['title'] + EXT_OF.get(row['mime'], '')),
+            'name': row['file_name'] or (row['title'] + EXT_OF.get(row['mime'], '')),
             'mime': row['mime'], 'size': row['size'], 'at': row['updated_at'], 'score': score}
 
 
@@ -217,26 +215,3 @@ def safe_name(title: str, mime: str) -> str:
     """내려받을 때 쓸 파일 이름. 경로 구분자 같은 글자는 뺀다."""
     base = re.sub(r'[\\/:*?"<>|\r\n\t]+', ' ', str(title or '악보')).strip() or '악보'
     return base[:120] + EXT_OF.get(mime, '')
-
-
-# ---------- 드라이브 목록 ----------
-
-def as_int(value) -> int:
-    try:
-        return max(0, int(value))
-    except (TypeError, ValueError):
-        return 0
-
-
-def as_ms(value) -> int:
-    """드라이브의 modifiedTime(RFC 3339)을 밀리초 epoch으로."""
-    if not value:
-        return 0
-    try:
-        return int(datetime.fromisoformat(str(value).replace('Z', '+00:00')).timestamp() * 1000)
-    except ValueError:
-        return 0
-
-
-def index_count(db: sqlite3.Connection) -> int:
-    return int(db.execute('SELECT count(*) FROM drive_index').fetchone()[0])

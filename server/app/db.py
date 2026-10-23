@@ -152,6 +152,40 @@ MIGRATIONS = [
     ALTER TABLE setlists_new RENAME TO setlists;
     CREATE INDEX setlists_created ON setlists(created_at DESC);
     """,
+    # 구글 드라이브 연동을 뗀다(악보는 서버에 직접 올린다). 드라이브 흔적을 지우고
+    # drive_name을 file_name으로 고친다. sync 칸은 CHECK 때문에 DROP COLUMN이 안 되므로
+    # 표를 다시 만든다. sheet_aliases가 sheets를 참조하므로 먼저 떼어 두고 되살린다.
+    """
+    CREATE TABLE sheets_new (
+      id INTEGER PRIMARY KEY,
+      song_key TEXT NOT NULL UNIQUE,
+      title TEXT NOT NULL,
+      file_name TEXT NOT NULL DEFAULT '',
+      mime TEXT NOT NULL DEFAULT '',
+      size INTEGER NOT NULL DEFAULT 0,
+      file_path TEXT NOT NULL DEFAULT '',
+      created_by TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    INSERT INTO sheets_new
+      (id, song_key, title, file_name, mime, size, file_path, created_by, created_at, updated_at)
+      SELECT id, song_key, title, drive_name, mime, size, file_path, created_by, created_at, updated_at
+      FROM sheets;
+    CREATE TABLE aliases_keep AS SELECT alias_key, sheet_id FROM sheet_aliases;
+    DROP TABLE sheet_aliases;
+    DROP TABLE sheets;
+    ALTER TABLE sheets_new RENAME TO sheets;
+    CREATE INDEX sheets_title ON sheets(title);
+    CREATE TABLE sheet_aliases (
+      alias_key TEXT PRIMARY KEY,
+      sheet_id INTEGER NOT NULL REFERENCES sheets(id) ON DELETE CASCADE
+    );
+    CREATE INDEX sheet_aliases_sheet ON sheet_aliases(sheet_id);
+    INSERT INTO sheet_aliases (alias_key, sheet_id) SELECT alias_key, sheet_id FROM aliases_keep;
+    DROP TABLE aliases_keep;
+    DROP TABLE drive_index;
+    """,
 ]
 
 

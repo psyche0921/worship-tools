@@ -293,14 +293,6 @@ button.confirm{background:var(--err)!important;color:#fff!important;border-color
       <div class="msg" id="autoMsg"></div>
     </div>
 
-    <div class="card" id="importCard" hidden>
-      <label>드라이브 악보 가져오기 <span class="badge" id="sheetState">한 번만</span></label>
-      <p class="rec-hint" style="margin:0 0 10px">지금까지 구글 드라이브에 모아 둔 악보를 <b>서버로 옮기는 한시적인 기능</b>이에요. 옮기고 나면 악보는 서버에 직접 올리니 이 카드는 없애집니다. 중간에 멈춰도 다시 누르면 남은 것부터 이어서 가져와요.</p>
-      <div class="vh-meta" id="sheetMeta"></div>
-      <div class="row"><button id="importDrive">드라이브에서 모두 가져오기</button></div>
-      <div class="msg" id="sheetMsg"></div>
-    </div>
-
     <div class="card">
       <label>팀원 (로그인 허용 이메일)</label>
       <p class="hint" style="font-size:.85rem;color:var(--muted);margin:0 0 8px">팀원은 세트리스트, 쇼츠 기획, 작업 기록을 사용할 수 있어요. Google Cloud의 OAuth 테스트 사용자에도 같은 이메일을 추가해야 할 수 있어요.</p>
@@ -481,7 +473,6 @@ async function onCredential(resp){
 $('#logoutBtn').onclick = async () => {
   try{ await api('/api/auth/logout', {method: 'POST'}); }catch(_){}
   if(window.google && google.accounts && google.accounts.id) google.accounts.id.disableAutoSelect();
-  clearAllTokens();
   showLogin();
 };
 
@@ -530,45 +521,6 @@ function render(){
   });
   loadSheetRows();
 }
-
-/* ---------- Google 토큰 ----------
-   지금은 드라이브 악보를 **한 번만** 서버로 가져올 때만 쓴다(가져오기가 끝나면 이 블록도
-   지운다). 유튜브 재생목록을 만들지 않게 되어 `youtube` 범위는 더 쓰지 않는다.
-   범위마다 토큰 클라이언트를 따로 두고 `include_granted_scopes`를 끈다 — 범위를 묶어
-   요청하면 구글이 `400 invalid_request: scopes that cannot be requested together`를 낸다. */
-const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
-const tokens = {};   // 범위 → {client, token, exp}
-
-function tokenSlot(scope){
-  return tokens[scope] || (tokens[scope] = {client: null, token: null, exp: 0});
-}
-
-function getToken(scope = DRIVE_SCOPE){
-  const slot = tokenSlot(scope);
-  return new Promise((resolve, reject) => {
-    if(slot.token && Date.now() < slot.exp - 60000) return resolve(slot.token);
-    const cid = CONFIG.clientId;
-    if(!cid) return reject(new Error('서버에 OAuth 클라이언트 ID가 설정되지 않았어요.'));
-    if(!window.google || !google.accounts || !google.accounts.oauth2)
-      return reject(new Error('Google 로그인 스크립트를 불러오지 못했어요. 잠시 후 다시 시도하세요.'));
-    if(!slot.client){
-      slot.client = google.accounts.oauth2.initTokenClient({
-        client_id: cid, scope, include_granted_scopes: false, callback: () => {}
-      });
-    }
-    slot.client.callback = resp => {
-      if(resp.error) return reject(new Error('로그인 실패: ' + resp.error));
-      slot.token = resp.access_token;
-      slot.exp = Date.now() + (resp.expires_in || 3600) * 1000;
-      resolve(slot.token);
-    };
-    slot.client.error_callback = err => reject(new Error('로그인 창이 닫혔거나 차단됐어요. (' + (err.type || 'error') + ')'));
-    slot.client.requestAccessToken({prompt: ''});
-  });
-}
-
-function clearToken(scope){ tokenSlot(scope).token = null; }
-function clearAllTokens(){ Object.keys(tokens).forEach(clearToken); }
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -1803,81 +1755,8 @@ function fillSettings(st){
   $('#keyWarn').hidden = st.geminiKeySet;
   $('#skillMeta').textContent = st.skillUpdatedAt
     ? `마지막 수정: ${fmtWhen(st.skillUpdatedAt)} · ${st.skillUpdatedBy}` : '아직 등록된 지침이 없어요.';
-  fillSheetSettings(st);
 }
 
-
-/* ---------- 설정 탭: 드라이브 악보 가져오기 (한 번만 쓰고 지운다) ----------
-   드라이브에 있던 악보를 서버로 옮긴다. 브라우저가 drive.file 토큰으로 파일을 받아
-   서버에 올린다(제목은 파일 이름에서). 다 옮기면 이 블록과 카드를 지운다. */
-let importTodo = [];
-
-async function driveDownload(fileId){
-  const token = await getToken(DRIVE_SCOPE);
-  const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`;
-  const res = await fetch(url, {headers: {Authorization: 'Bearer ' + token}});
-  if(res.ok) return res.blob();
-  if(res.status === 401 || res.status === 403) clearToken(DRIVE_SCOPE);
-  const body = await res.json().catch(() => ({}));
-  const reason = body.error && body.error.message ? body.error.message : 'HTTP ' + res.status;
-  const err = new Error(res.status === 404
-    ? '드라이브에서 그 파일을 찾을 수 없어요.'
-    : '드라이브에서 받지 못했어요: ' + reason);
-  err.status = res.status;
-  throw err;
-}
-
-async function fillSheetSettings(st){
-  const total = st.driveIndexCount || 0;
-  if(!total){ $('#importCard').hidden = true; return; }   // 가져올 것이 없으면 카드를 숨긴다
-  $('#importCard').hidden = false;
-  try{ const r = await api('/api/drive/todo'); importTodo = r.items; }
-  catch(e){ importTodo = []; }
-  $('#sheetState').textContent = importTodo.length ? `${importTodo.length}개 남음` : '모두 옮겼어요';
-  $('#sheetState').className = 'badge' + (importTodo.length ? '' : ' on');
-  $('#importDrive').disabled = !importTodo.length;
-  $('#sheetMeta').textContent = importTodo.length
-    ? `드라이브 악보 ${total}개 중 ${total - importTodo.length}개를 옮겼어요.`
-    : `드라이브 악보 ${total}개를 모두 서버로 옮겼어요. 이제 악보는 서버에 직접 올립니다.`;
-}
-
-/* 드라이브에서 받아 서버에 올린다. 파일 이름에서 확장자를 떼어 곡 제목으로 쓴다. */
-function titleFromName(name){
-  return String(name || '').replace(/\.(pdf|png|jpe?g|gif|webp)$/i, '').trim() || '악보';
-}
-
-$('#importDrive').onclick = async e => {
-  const btn = e.currentTarget, msg = $('#sheetMsg');
-  btn.disabled = true; msg.className = 'msg'; msg.textContent = '';
-  let ok = 0, fail = 0;
-  try{
-    await getToken(DRIVE_SCOPE);   // 동의 창을 한 번만 띄운다
-    for(const f of importTodo.slice()){
-      msg.textContent = `${f.name} 가져오는 중… (${ok + fail + 1}/${importTodo.length})`;
-      try{
-        const blob = await driveDownload(f.driveFileId);
-        const fd = new FormData();
-        fd.append('title', titleFromName(f.name));
-        fd.append('fileName', f.name);
-        fd.append('file', blob, f.name);
-        await apiForm('/api/sheets', fd);
-        ok++;
-      }catch(err){
-        fail++;
-        if(err.status === 401 || err.status === 403) throw err;   // 권한이면 더 해도 소용없다
-      }
-    }
-    msg.className = fail ? 'msg err' : 'msg';
-    msg.textContent = fail ? `${ok}개를 옮겼고 ${fail}개는 실패했어요. 다시 누르면 남은 것부터 이어서 해요.`
-      : `${ok}개를 모두 서버로 옮겼어요.`;
-  }catch(err){
-    msg.className = 'msg err';
-    msg.textContent = `${ok}개까지 옮겼어요. ${err.message}`;
-  }finally{
-    btn.disabled = false;
-    try{ await fillSheetSettings(await api('/api/settings')); }catch(_){}
-  }
-};
 
 
 function renderMembers(list){
