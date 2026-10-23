@@ -293,22 +293,17 @@ button.confirm{background:var(--err)!important;color:#fff!important;border-color
       <div class="msg" id="autoMsg"></div>
     </div>
 
-    <div class="card">
-      <label>악보 (구글 드라이브) <span class="badge" id="sheetState">고른 악보 없음</span></label>
-      <p class="rec-hint" style="margin:0 0 10px">세트리스트를 만들 때 곡마다 악보를 찾아 붙여요. 구글은 이 앱에 <b>직접 고른 파일만</b> 보여 주기 때문에, 쓸 악보를 한 번 골라 둬야 합니다(여러 개를 한꺼번에 고를 수 있어요). 한 번 고르면 다음부터는 곡 제목으로 저절로 걸립니다. 폴더는 새로 올리는 악보를 넣을 곳이에요.</p>
-      <p class="warn" id="pickerWarn" hidden>서버에 GOOGLE_PICKER_KEY 또는 GOOGLE_PICKER_APP_ID가 없어서 드라이브에서 고를 수 없어요. Google Cloud에서 Picker API와 Drive API를 켜고, 브라우저용 API 키(리퍼러에 <code>https://docs.google.com/*</code>도 넣어야 해요)와 프로젝트 번호를 넣어 주세요.</p>
+    <div class="card" id="importCard" hidden>
+      <label>드라이브 악보 가져오기 <span class="badge" id="sheetState">한 번만</span></label>
+      <p class="rec-hint" style="margin:0 0 10px">지금까지 구글 드라이브에 모아 둔 악보를 <b>서버로 옮기는 한시적인 기능</b>이에요. 옮기고 나면 악보는 서버에 직접 올리니 이 카드는 없애집니다. 중간에 멈춰도 다시 누르면 남은 것부터 이어서 가져와요.</p>
       <div class="vh-meta" id="sheetMeta"></div>
-      <div class="row">
-        <button id="syncIndex">쓸 악보 고르기</button>
-        <button class="ghost" id="pickFolder">올릴 폴더 고르기</button>
-      </div>
-      <div id="pendingList"></div>
+      <div class="row"><button id="importDrive">드라이브에서 모두 가져오기</button></div>
       <div class="msg" id="sheetMsg"></div>
     </div>
 
     <div class="card">
       <label>팀원 (로그인 허용 이메일)</label>
-      <p class="hint" style="font-size:.85rem;color:var(--muted);margin:0 0 8px">팀원은 쇼츠 기획과 작업 기록만 사용할 수 있어요. Google Cloud의 OAuth 테스트 사용자에도 같은 이메일을 추가해야 할 수 있어요.</p>
+      <p class="hint" style="font-size:.85rem;color:var(--muted);margin:0 0 8px">팀원은 세트리스트, 쇼츠 기획, 작업 기록을 사용할 수 있어요. Google Cloud의 OAuth 테스트 사용자에도 같은 이메일을 추가해야 할 수 있어요.</p>
       <div id="memberList"></div>
       <div class="two field">
         <div><label for="mEmail">이메일</label><input id="mEmail" type="email" placeholder="name@gmail.com" autocomplete="off"></div>
@@ -425,7 +420,6 @@ const store = {
 };
 
 const $ = s => document.querySelector(s);
-const PRIVACY = 'unlisted'; // 링크가 있는 사람만 접근
 
 /* ---------- 서버 API ---------- */
 let CONFIG = {clientId: ''}, ME = null;
@@ -488,7 +482,6 @@ $('#logoutBtn').onclick = async () => {
   try{ await api('/api/auth/logout', {method: 'POST'}); }catch(_){}
   if(window.google && google.accounts && google.accounts.id) google.accounts.id.disableAutoSelect();
   clearAllTokens();
-  SHEETCFG = null;
   showLogin();
 };
 
@@ -521,12 +514,11 @@ function render(){
           <div class="meta">
             <div class="name">${esc(s.name || '(제목 없음)')}</div>
             ${s.notes.length ? `<div class="notes">${esc(s.notes.join('\n'))}</div>` : ''}
-            <div class="st" id="st-${bi}-${si}"></div>
             <div class="sheets" id="sh-${bi}-${si}"></div>
           </div>
         </div>`).join('')}
       <div class="row">
-        <button class="create">재생목록 만들기</button>
+        <button class="create">세트리스트 만들기</button>
         <a class="btn ghost" target="_blank" rel="noopener"
            href="https://www.youtube.com/watch_videos?video_ids=${b.songs.map(s=>s.id).join(',')}">로그인 없이 재생</a>
       </div>
@@ -534,18 +526,16 @@ function render(){
       <div class="out"></div>
     </div>`).join('');
   wrap.querySelectorAll('.create').forEach(btn => {
-    btn.onclick = () => createPlaylist(+btn.closest('[data-b]').dataset.b, btn);
+    btn.onclick = () => createSetlist(+btn.closest('[data-b]').dataset.b, btn);
   });
   loadSheetRows();
 }
 
-/* ---------- Google 토큰 (범위마다 따로 받는다) ----------
-   youtube와 drive.file은 **한 번에 요청할 수 없다** — 함께 넣으면 구글이
-   `400 invalid_request: scopes that cannot be requested together`를 낸다.
-   그래서 범위마다 토큰 클라이언트를 따로 두고, `include_granted_scopes`를 꺼서
-   이미 받아 둔 범위가 함께 묶이지 않게 한다(묶이면 같은 오류가 난다).
-   drive.file은 민감 범위가 아니다. Picker로 고른 악보 폴더와 이 앱이 만든 파일만 다룬다. */
-const YT_SCOPE = 'https://www.googleapis.com/auth/youtube';
+/* ---------- Google 토큰 ----------
+   지금은 드라이브 악보를 **한 번만** 서버로 가져올 때만 쓴다(가져오기가 끝나면 이 블록도
+   지운다). 유튜브 재생목록을 만들지 않게 되어 `youtube` 범위는 더 쓰지 않는다.
+   범위마다 토큰 클라이언트를 따로 두고 `include_granted_scopes`를 끈다 — 범위를 묶어
+   요청하면 구글이 `400 invalid_request: scopes that cannot be requested together`를 낸다. */
 const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
 const tokens = {};   // 범위 → {client, token, exp}
 
@@ -553,7 +543,7 @@ function tokenSlot(scope){
   return tokens[scope] || (tokens[scope] = {client: null, token: null, exp: 0});
 }
 
-function getToken(scope = YT_SCOPE){
+function getToken(scope = DRIVE_SCOPE){
   const slot = tokenSlot(scope);
   return new Promise((resolve, reject) => {
     if(slot.token && Date.now() < slot.exp - 60000) return resolve(slot.token);
@@ -580,33 +570,18 @@ function getToken(scope = YT_SCOPE){
 function clearToken(scope){ tokenSlot(scope).token = null; }
 function clearAllTokens(){ Object.keys(tokens).forEach(clearToken); }
 
-async function yt(path, body){
-  const res = await fetch('https://www.googleapis.com/youtube/v3/' + path, {
-    method: 'POST',
-    headers: {'Authorization': 'Bearer ' + tokenSlot(YT_SCOPE).token, 'Content-Type': 'application/json'},
-    body: JSON.stringify(body)
-  });
-  const data = await res.json().catch(() => ({}));
-  if(!res.ok){
-    const e = new Error((data.error && data.error.message) || ('HTTP ' + res.status));
-    e.status = res.status;
-    e.reason = data.error && data.error.errors && data.error.errors[0] && data.error.errors[0].reason;
-    throw e;
-  }
-  return data;
-}
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-/* ---------- 재생목록 결과 (생성 직후/기록 공용) ---------- */
+/* ---------- 공유 링크 결과 (생성 직후/기록 공용) ---------- */
 function playlistResultHtml(title, url){
   return `<div class="result">
-      <div class="rtitle">${esc(title)} · 일부 공개</div>
+      <div class="rtitle">${esc(title)} · 링크를 아는 사람만</div>
       <input class="link" value="${esc(url)}" readonly>
       <div class="row">
         <button class="copy">링크 복사</button>
         <button class="ghost share">카톡 등으로 공유</button>
       </div>
-      <div class="row"><a class="btn ghost" href="${esc(url)}" target="_blank" rel="noopener">유튜브에서 열기</a></div>
+      <div class="row"><a class="btn ghost" href="${esc(url)}" target="_blank" rel="noopener">공유 페이지 열기</a></div>
     </div>`;
 }
 function bindPlaylistResult(box, title, url){
@@ -623,86 +598,43 @@ function bindPlaylistResult(box, title, url){
 }
 
 /* ---------- 재생목록 생성 ---------- */
-async function createPlaylist(bi, btn){
+/* 유튜브 재생목록은 만들지 않는다. 공유 페이지가 연속 재생한다(docs/setlist-share.md). */
+async function createSetlist(bi, btn){
   const card = btn.closest('[data-b]');
   const msg = card.querySelector('.msg'), out = card.querySelector('.out');
   const block = parsed[bi];
   const title = card.querySelector('.title').value.trim() || block.title;
   msg.className = 'msg'; msg.textContent = '';
   btn.disabled = true;
-
   try{
-    await getToken();
-    msg.textContent = '재생목록 만드는 중…';
-    const pl = await yt('playlists?part=snippet,status', {
-      snippet: {title, description: buildDescription(block)},
-      status: {privacyStatus: PRIVACY}
-    });
-
-    let ok = 0;
-    for(let si = 0; si < block.songs.length; si++){
-      const st = document.getElementById(`st-${bi}-${si}`);
-      st.className = 'st run'; st.textContent = '추가 중…';
-      let tries = 0;
-      while(true){
-        try{
-          await yt('playlistItems?part=snippet', {
-            snippet: {playlistId: pl.id, resourceId: {kind: 'youtube#video', videoId: block.songs[si].id}}
-          });
-          st.className = 'st ok'; st.textContent = '추가됨'; ok++;
-          break;
-        }catch(e){
-          if((e.status === 409 || e.status >= 500) && tries++ < 2){ await sleep(1200); continue; }
-          st.className = 'st err';
-          st.textContent = e.reason === 'videoNotFound' ? '영상을 찾을 수 없음 (삭제/비공개)' : '실패: ' + e.message;
-          break;
-        }
-      }
-      await sleep(250);
-    }
-
-    const url = 'https://www.youtube.com/playlist?list=' + pl.id;
-    msg.textContent = `${block.songs.length}곡 중 ${ok}곡 추가 완료 · 작업 기록에 저장됨`;
-    out.innerHTML = playlistResultHtml(title, url);
-    bindPlaylistResult(out, title, url);
-    try{
-      await api('/api/setlists', {method: 'POST', body: {
-        playlistId: pl.id, title, url, ok, total: block.songs.length,
-        songs: block.songs.map(s => ({id: s.id, name: s.name, notes: s.notes, sheets: songSheets(s)})),
-        rawMessage: $('#input').value
-      }});
-      records.invalidate();
-    }catch(e){ throw new Error('재생목록은 만들었지만 작업 기록 저장에 실패했어요: ' + e.message); }
+    msg.textContent = '만드는 중…';
+    const it = await api('/api/setlists', {method: 'POST', body: {
+      title,
+      songs: block.songs.map(s => ({id: s.id, name: s.name, notes: s.notes, sheets: songSheets(s)})),
+      rawMessage: $('#input').value
+    }});
+    const n = block.songs.reduce((a, s) => a + songSheets(s).length, 0);
+    msg.textContent = `${block.songs.length}곡 · 악보 ${n}개 · 이 링크를 찬양팀에 보내면 돼요.`;
+    out.innerHTML = playlistResultHtml(title, it.shareUrl);
+    bindPlaylistResult(out, title, it.shareUrl);
+    records.invalidate();
   }catch(e){
     msg.className = 'msg err';
     msg.textContent = e.message;
-    if(e.status === 401){ clearToken(YT_SCOPE); }
-    if(e.status === 403 && /quota/i.test(e.message)) msg.textContent = '오늘 API 할당량을 다 썼어요. 내일 다시 시도하세요.';
   }finally{
     btn.disabled = false;
   }
 }
 
-/* ================= 악보 (구글 드라이브) =================
-   서버는 드라이브를 부르지 않는다(docs/sheets-design.md 1장). 브라우저가 드라이브를 읽고
-   쓰고, 그 결과만 서버에 알려 준다. 서버는 악보 사본과 곡↔악보 매핑을 보관한다. */
 
-let SHEETCFG = null;   // {folderId, folderName, pickerKey, maxMb}
+/* ================= 악보 =================
+   악보는 서버에 바로 올린다(docs/setlist-share.md 6장). 구글 드라이브 연동은 뗐다.
+   같은 곡이 다시 세트리스트에 나오면 곡 제목으로 저절로 붙고, 제목이 조금 다르면
+   이미 올라온 악보를 후보로 보여 준다(고르면 별칭이 생겨 다음부터 자동으로 붙는다). */
 
-async function sheetConfig(reload){
-  if(SHEETCFG && !reload) return SHEETCFG;
-  if(!isAdmin()) return (SHEETCFG = {folderId: '', folderName: '', pickerKey: '', maxMb: 20});
-  return setSheetConfig(await api('/api/settings'));
-}
+const SHEET_ACCEPT = 'application/pdf,image/png,image/jpeg';
+let sheetsOnServer = 0;   // 올라온 악보 수(후보가 없을 때 안내 문구에 쓴다)
 
-function setSheetConfig(st){
-  SHEETCFG = {folderId: st.sheetFolderId || '', folderName: st.sheetFolderName || '',
-              pickerKey: st.pickerKey || '', pickerAppId: st.pickerAppId || '',
-              maxMb: st.maxSheetMb || 20};
-  return SHEETCFG;
-}
-
-/* ---------- multipart로 서버에 올리기 ---------- */
 async function apiForm(path, fd){
   let res;
   try{ res = await fetch(path, {method: 'POST', body: fd, credentials: 'same-origin'}); }
@@ -717,117 +649,6 @@ async function apiForm(path, fd){
   return data;
 }
 
-/* ---------- 드라이브 호출 ---------- */
-async function drive(url, init = {}){
-  const token = await getToken(DRIVE_SCOPE);
-  const res = await fetch(url, {...init, headers: {...(init.headers || {}), Authorization: 'Bearer ' + token}});
-  if(res.ok) return res;
-  if(res.status === 401 || res.status === 403) clearToken(DRIVE_SCOPE);
-  const body = await res.json().catch(() => ({}));
-  const reason = body.error && body.error.message ? body.error.message : 'HTTP ' + res.status;
-  const err = new Error(res.status === 404
-    ? '드라이브에서 그 파일을 찾을 수 없어요. 폴더를 다시 골라 주세요.'
-    : '드라이브 요청이 실패했어요: ' + reason);
-  err.status = res.status;
-  throw err;
-}
-
-const FOLDER_MIME = 'application/vnd.google-apps.folder';
-const SHEET_MIMES = 'application/pdf,image/png,image/jpeg';
-
-async function driveDownload(fileId){
-  const res = await drive(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`);
-  return res.blob();
-}
-
-async function driveUpload(folderId, name, file){
-  const fd = new FormData();
-  fd.append('metadata', new Blob([JSON.stringify({name, parents: [folderId]})], {type: 'application/json'}));
-  fd.append('file', file);
-  const res = await drive('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name',
-                          {method: 'POST', body: fd});
-  return res.json();
-}
-
-/* ---------- Picker (폴더 고르기) ---------- */
-let pickerReady = null;
-function loadPicker(){
-  if(pickerReady) return pickerReady;
-  pickerReady = new Promise((resolve, reject) => {
-    const s = document.createElement('script');
-    s.src = 'https://apis.google.com/js/api.js';
-    s.onload = () => gapi.load('picker', {
-      callback: resolve,
-      onerror: () => reject(new Error('구글 Picker를 불러오지 못했어요.'))
-    });
-    s.onerror = () => { pickerReady = null; reject(new Error('구글 Picker 스크립트를 불러오지 못했어요.')); };
-    document.head.appendChild(s);
-  });
-  return pickerReady;
-}
-
-/* Picker를 띄워서 고른 것을 돌려준다.
-   `drive.file` 범위는 **고른 것에만** 권한을 준다. 그래서 악보를 쓰려면 반드시
-   여기를 지나야 한다(폴더만 골라서는 그 안의 파일을 읽을 수 없다). */
-async function openPicker({title, makeView, multi}){
-  const cfg = await sheetConfig();
-  if(!cfg.pickerKey) throw new Error('서버에 GOOGLE_PICKER_KEY가 설정되지 않았어요.');
-  // appId(Cloud 프로젝트 번호)가 있어야 고른 파일이 이 앱에 허락된다.
-  if(!cfg.pickerAppId) throw new Error('서버에 GOOGLE_PICKER_APP_ID(Cloud 프로젝트 번호)가 설정되지 않았어요.');
-  const token = await getToken(DRIVE_SCOPE);
-  await loadPicker();           // google.picker는 이 뒤에야 생긴다 — view는 여기서 만든다
-  const view = makeView();
-  return new Promise(resolve => {
-    const b = new google.picker.PickerBuilder()
-      .setTitle(title)
-      .setOAuthToken(token)
-      .setDeveloperKey(cfg.pickerKey)
-      .setAppId(cfg.pickerAppId)
-      .addView(view)
-      .setCallback(d => {
-        if(d.action === google.picker.Action.PICKED) resolve(d.docs || []);
-        else if(d.action === google.picker.Action.CANCEL) resolve(null);
-      });
-    if(multi) b.enableFeature(google.picker.Feature.MULTISELECT_ENABLED);
-    b.build().setVisible(true);
-  });
-}
-
-async function pickFolder(){
-  const docs = await openPicker({
-    title: '악보 폴더 고르기',
-    makeView: () => new google.picker.DocsView(google.picker.ViewId.FOLDERS)
-      .setIncludeFolders(true).setSelectFolderEnabled(true).setMimeTypes(FOLDER_MIME),
-  });
-  return docs && docs[0];
-}
-
-/* 악보 파일을 고른다. query를 주면 그 말로 검색된 상태로 열린다(곡 제목). */
-async function pickSheetFiles({query, multi}){
-  const cfg = await sheetConfig();
-  return openPicker({
-    title: query ? `‘${query}’ 악보 고르기` : '쓸 악보 고르기 (여러 개)',
-    multi,
-    makeView(){
-      const view = new google.picker.DocsView(google.picker.ViewId.DOCS).setMimeTypes(SHEET_MIMES);
-      if(query) view.setQuery(query);
-      else if(cfg.folderId) view.setParent(cfg.folderId);
-      return view;
-    },
-  });
-}
-
-/* 고른 악보를 목록에 넣는다 → 다음부터 곡 제목으로 자동으로 걸린다. */
-function indexPicked(docs){
-  return api('/api/drive/index', {method: 'PUT', body: {files: docs.map(d => ({
-    id: d.id, name: d.name || '', mimeType: d.mimeType || '',
-    size: d.sizeBytes || d.size || 0,
-    modifiedTime: d.lastEditedUtc ? new Date(d.lastEditedUtc).toISOString() : null
-  }))}});
-}
-
-/* ---------- 파일 고르기 ---------- */
-const SHEET_ACCEPT = 'application/pdf,image/png,image/jpeg';
 function pickLocalFile(){
   return new Promise(resolve => {
     const el = document.createElement('input');
@@ -838,49 +659,21 @@ function pickLocalFile(){
   });
 }
 
-const SHEET_EXT = {'application/pdf': '.pdf', 'image/png': '.png', 'image/jpeg': '.jpg'};
-function sheetExt(file){
-  return SHEET_EXT[file.type] || ('.' + (file.name.split('.').pop() || 'pdf')).toLowerCase();
-}
-
-/* ---------- 악보 붙이기 ---------- */
-
-/* 드라이브의 후보를 골랐다 → 브라우저가 받아서 서버에 사본을 올린다. */
-async function linkCandidate(row, cand){
-  const blob = await driveDownload(cand.driveFileId);
+/* 서버에 바로 올린다. 같은 곡에 이미 있으면 바뀐다. */
+async function uploadSheet(row, file){
   const fd = new FormData();
   fd.append('title', row.title);
-  fd.append('driveFileId', cand.driveFileId);
-  fd.append('driveName', cand.name);
-  fd.append('file', blob, cand.name);
+  fd.append('fileName', file.name || '');
+  fd.append('file', file, file.name || 'sheet.pdf');
   row.sheet = await apiForm('/api/sheets', fd);
   row.candidates = [];
   return row.sheet;
 }
 
-/* 드라이브에서 이 곡의 악보를 직접 찾아 고른다(곡 제목으로 검색된 채 열린다). */
-async function pickFromDrive(row){
-  const docs = await pickSheetFiles({query: row.title});
-  if(!docs || !docs.length) return false;
-  await indexPicked(docs);   // 고른 파일은 다음부터 후보로도 걸린다
-  const d = docs[0];
-  await linkCandidate(row, {driveFileId: d.id, name: d.name || row.title});
-  return true;
-}
-
-/* 새 악보를 올린다. 관리자면 드라이브에도 올리고, 팀원이면 서버에만 둔다(pending). */
-async function uploadSheet(row, file){
-  const cfg = await sheetConfig();
-  const fd = new FormData();
-  fd.append('title', row.title);
-  if(isAdmin()){
-    if(!cfg.folderId) throw new Error('설정 탭에서 악보 폴더를 먼저 골라 주세요.');
-    const up = await driveUpload(cfg.folderId, row.title + sheetExt(file), file);
-    fd.append('driveFileId', up.id);
-    fd.append('driveName', up.name);
-  }
-  fd.append('file', file, file.name);
-  row.sheet = await apiForm('/api/sheets', fd);
+/* 이미 올라온 악보를 이 곡에도 쓴다(제목이 조금 다른 같은 곡). */
+async function useSheet(row, cand){
+  row.sheet = await api(`/api/sheets/${cand.sheetId}/alias`,
+                        {method: 'POST', body: {title: row.title}});
   row.candidates = [];
   return row.sheet;
 }
@@ -900,22 +693,22 @@ function sheetModal(row, onPick){
         <div class="vh-title" style="flex:1">${esc(row.title)} 악보 고르기</div>
         <button class="ghost close" style="padding:6px 12px;flex:none">닫기</button>
       </div>
-      <div class="vh-meta">고라 둔 악보 중에 이름이 비슷한 파일이에요. 고르면 다음부터 이 곡에 자동으로 붙어요.</div>
+      <div class="vh-meta">이미 올라온 악보 중에 제목이 비슷한 것이에요. 고르면 다음부터 이 곡에 자동으로 붙어요.</div>
       <div style="margin-top:10px">
         ${row.candidates.map((c, i) => `
           <div class="cand">
             <div class="ci">
-              <div class="cn">${esc(c.name)}</div>
-              <div class="cm">${[fmtSize(c.size), c.modifiedAt ? fmtWhen(c.modifiedAt) : ''].filter(Boolean).join(' · ')}</div>
+              <div class="cn">${esc(c.title)}</div>
+              <div class="cm">${[esc(c.name), fmtSize(c.size), c.at ? fmtWhen(c.at) : ''].filter(Boolean).join(' · ')}</div>
             </div>
             <button data-i="${i}">이걸로</button>
           </div>`).join('')}
         <div class="cand">
           <div class="ci">
             <div class="cn">여기 없나요?</div>
-            <div class="cm">드라이브에서 바로 찾아 고를 수 있어요.</div>
+            <div class="cm">이 곡의 악보를 새로 올릴 수 있어요.</div>
           </div>
-          <button class="ghost fromDrive">드라이브에서 찾기</button>
+          <button class="ghost upNew">올리기</button>
         </div>
       </div>
       <div class="msg mmsg"></div>
@@ -937,52 +730,50 @@ function sheetModal(row, onPick){
     }
   };
   buttons.forEach(b => {
-    if(b.classList.contains('fromDrive')){
-      b.onclick = run('드라이브 창을 여는 중…', () => pickFromDrive(row));
+    if(b.classList.contains('upNew')){
+      b.onclick = run('악보 올리는 중…', async () => {
+        const file = await pickLocalFile();
+        if(!file) return false;
+        return uploadSheet(row, file);
+      });
     }else{
-      const cand = row.candidates[+b.dataset.i];
-      b.onclick = run('드라이브에서 받는 중…', () => linkCandidate(row, cand));
+      b.onclick = run('이어 붙이는 중…', () => useSheet(row, row.candidates[+b.dataset.i]));
     }
   });
   document.body.appendChild(wrap);
 }
 
 /* ---------- 세트리스트 탭의 악보 줄 ---------- */
-let sheetIndexed = 0;
 
 /* 미리보기를 그린 뒤 곡마다 악보를 찾는다(메들리는 서버가 쪼갠다). */
 async function loadSheetRows(){
-  if(!isAdmin()) return;
   const names = [];
   parsed.forEach(b => b.songs.forEach(s => names.push(s.name || '')));
   if(!names.length) return;
   let res;
   try{ res = await api('/api/sheets/match', {method: 'POST', body: {names}}); }
   catch(e){ return; }
-  sheetIndexed = res.indexed;
+  sheetsOnServer = res.indexed;
   let i = 0;
   parsed.forEach(b => b.songs.forEach(s => { s.sheetRows = (res.items[i++] || {}).songs || []; }));
   parsed.forEach((b, bi) => b.songs.forEach((s, si) => drawSheetRows(bi, si)));
-  sheetConfig(true).catch(() => {});
 }
 
 function sheetRowHtml(row, many, bi, si, ri){
-  const s = row.sheet;
+  const s = row.sheet, k = `${bi}-${si}-${ri}`;
   const label = many ? row.title : '악보';
   let state, btns;
   if(s){
-    state = `<span class="sh-n ${s.sync === 'drive' ? 'ok' : 'pend'}">${esc(s.name)}`
-      + `${s.sync === 'drive' ? '' : ' · 드라이브 대기'}</span>`;
+    state = `<span class="sh-n ok">${esc(s.name)}</span>`;
     btns = `<a class="btn ghost" href="/api/sheets/${s.id}/file">받기</a>`
-      + `<button class="ghost up" data-k="${bi}-${si}-${ri}">바꾸기</button>`;
+      + `<button class="ghost up" data-k="${k}">바꾸기</button>`;
   }else if(row.candidates.length){
-    state = `<span class="sh-n none">비슷한 파일 ${row.candidates.length}개</span>`;
-    btns = `<button class="pick" data-k="${bi}-${si}-${ri}">고르기</button>`
-      + `<button class="ghost up" data-k="${bi}-${si}-${ri}">올리기</button>`;
+    state = `<span class="sh-n none">비슷한 악보 ${row.candidates.length}개</span>`;
+    btns = `<button class="pick" data-k="${k}">고르기</button>`
+      + `<button class="ghost up" data-k="${k}">올리기</button>`;
   }else{
-    state = `<span class="sh-n none">${sheetIndexed ? '찾지 못했어요' : '아직 고른 악보가 없어요'}</span>`;
-    btns = `<button class="pick" data-k="${bi}-${si}-${ri}">고르기</button>`
-      + `<button class="ghost up" data-k="${bi}-${si}-${ri}">올리기</button>`;
+    state = `<span class="sh-n none">${sheetsOnServer ? '올린 악보가 없어요' : '아직 올린 악보가 없어요'}</span>`;
+    btns = `<button class="up" data-k="${k}">올리기</button>`;
   }
   return `<div class="sh"><span class="sh-t">${esc(label)}</span>${state}${btns}</div>`;
 }
@@ -995,18 +786,7 @@ function drawSheetRows(bi, si){
   box.innerHTML = rows.map((r, ri) => sheetRowHtml(r, rows.length > 1, bi, si, ri)).join('');
   const at = k => { const [b, s, r] = k.split('-').map(Number); return parsed[b].songs[s].sheetRows[r]; };
   box.querySelectorAll('.pick').forEach(btn => {
-    btn.onclick = async () => {
-      const row = at(btn.dataset.k);
-      // 후보가 있으면 그중에서 고르고, 없으면 바로 드라이브에서 찾는다.
-      if(row.candidates.length) return sheetModal(row, () => drawSheetRows(bi, si));
-      const card = btn.closest('[data-b]'), msg = card && card.querySelector('.msg');
-      btn.disabled = true;
-      if(msg){ msg.className = 'msg'; msg.textContent = ''; }
-      try{
-        if(await pickFromDrive(row) && msg) msg.textContent = `${row.title} 악보를 붙였어요.`;
-      }catch(e){ if(msg){ msg.className = 'msg err'; msg.textContent = e.message; } }
-      finally{ btn.disabled = false; drawSheetRows(bi, si); }
-    };
+    btn.onclick = () => sheetModal(at(btn.dataset.k), () => drawSheetRows(bi, si));
   });
   box.querySelectorAll('.up').forEach(btn => {
     btn.onclick = async () => {
@@ -1025,10 +805,11 @@ function drawSheetRows(bi, si){
   });
 }
 
-/* 재생목록을 저장할 때 함께 넣을 악보 목록 */
+/* 세트리스트를 저장할 때 함께 넣을 악보 목록 */
 function songSheets(song){
   return (song.sheetRows || []).filter(r => r.sheet).map(r => ({sheetId: r.sheet.id, title: r.title}));
 }
+
 
 /* ---------- 기록 상세의 악보 줄 (팀원도 보고 올린다) ---------- */
 function recordSheetsHtml(song){
@@ -1071,13 +852,14 @@ function bindRecordUploads(box, it){
 
 /* ================= 탭 ================= */
 const SUBS = {
-  setlist: '단톡방 메시지를 붙여넣으면 곡을 찾아 재생목록을 만들어요.',
+  setlist: '단톡방 메시지를 붙여넣으면 곡과 악보를 모아 공유 링크를 만들어요.',
   shorts: '라이브 영상의 설교 구간으로 스킬 지침에 따라 쇼츠를 기획해요.',
   records: '세트리스트와 쇼츠 기획 기록을 한곳에서 찾아봐요.',
   admin: '쇼츠 기획 지침과 팀원을 관리해요.'
 };
 const ALL_TABS = ['setlist', 'shorts', 'records', 'admin'];
-const MEMBER_TABS = ['shorts', 'records'];  // 팀원은 쇼츠 기획과 작업 기록만 (서버도 관리자 API를 막는다)
+// 세트리스트도 팀원이 만들 수 있다(구글 연동이 없어졌다). 설정만 관리자 전용.
+const MEMBER_TABS = ['setlist', 'shorts', 'records'];
 const isAdmin = () => !!ME && ME.role === 'admin';
 const myTabs = () => isAdmin() ? ALL_TABS : MEMBER_TABS;
 function showTab(t){
@@ -1962,9 +1744,9 @@ function setlistViewInto(box, it, opts = {}){
     <div class="card view-head">
       <div class="block-head"><div class="vh-title" style="flex:1">${esc(it.title)}</div>
         ${opts.close ? '<button class="ghost close" style="padding:6px 12px;flex:none">닫기</button>' : ''}</div>
-      <div class="vh-meta">${esc((it.dateLabel ? it.dateLabel + ' 예배 · ' : '') + fmtWhen(it.at) + ' 생성 · ' + it.total + '곡'
-        + (it.ok < it.total ? ` (${it.ok}곡 추가됨)` : ''))}</div>
-      ${playlistResultHtml(it.title, it.url)}
+      <div class="vh-meta">${esc((it.dateLabel ? it.dateLabel + ' 예배 · ' : '') + fmtWhen(it.at) + ' 생성 · ' + it.total + '곡')}</div>
+      ${playlistResultHtml(it.title, it.shareUrl || '')}
+      ${it.url ? `<div class="row"><a class="btn ghost" href="${esc(it.url)}" target="_blank" rel="noopener">예전 유튜브 재생목록</a></div>` : ''}
       ${sheetCount(it) ? `<div class="row"><a class="btn ghost" href="/api/sheets/zip/${encodeURIComponent(it.key)}">악보 전체 받기 (${sheetCount(it)})</a></div>` : ''}
       ${opts.del ? '<div class="row"><button class="ghost del" data-label="기록 삭제">기록 삭제</button></div>' : ''}
       <div class="msg pdfMsg"></div>
@@ -1980,7 +1762,7 @@ function setlistViewInto(box, it, opts = {}){
         </div>`).join('')}
       </div>
     </div>`;
-  bindPlaylistResult(box, it.title, it.url);
+  bindPlaylistResult(box, it.title, it.shareUrl || '');
   if(opts.close) box.querySelector('.close').onclick = opts.close;
   bindDelete(box, opts.del);
   bindRecordUploads(box, it);
@@ -2024,96 +1806,79 @@ function fillSettings(st){
   fillSheetSettings(st);
 }
 
-/* ---------- 설정 탭: 악보 ---------- */
-function fillSheetSettings(st){
-  setSheetConfig(st);
-  const n = st.driveIndexCount || 0;
-  $('#sheetState').textContent = n ? `악보 ${n}개` : '고른 악보 없음';
-  $('#sheetState').className = 'badge' + (n ? ' on' : '');
-  $('#pickerWarn').hidden = !!(st.pickerKey && st.pickerAppId);
-  const folder = st.sheetFolderName || (st.sheetFolderId ? '폴더 선택됨' : '');
-  $('#sheetMeta').textContent = (n
-      ? `쓸 수 있는 악보 ${n}개 · 마지막으로 고른 때 ${fmtWhen(st.driveIndexAt)}.`
-      : '‘쓸 악보 고르기’로 드라이브의 악보를 골라 주세요. 여러 개를 한꺼번에 고를 수 있어요.')
-    + (folder ? ` 올릴 폴더: ${folder}` : ' 새 악보를 올리려면 폴더도 골라야 해요.');
-  renderPending(st.sheetPending || 0);
+
+/* ---------- 설정 탭: 드라이브 악보 가져오기 (한 번만 쓰고 지운다) ----------
+   드라이브에 있던 악보를 서버로 옮긴다. 브라우저가 drive.file 토큰으로 파일을 받아
+   서버에 올린다(제목은 파일 이름에서). 다 옮기면 이 블록과 카드를 지운다. */
+let importTodo = [];
+
+async function driveDownload(fileId){
+  const token = await getToken(DRIVE_SCOPE);
+  const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`;
+  const res = await fetch(url, {headers: {Authorization: 'Bearer ' + token}});
+  if(res.ok) return res.blob();
+  if(res.status === 401 || res.status === 403) clearToken(DRIVE_SCOPE);
+  const body = await res.json().catch(() => ({}));
+  const reason = body.error && body.error.message ? body.error.message : 'HTTP ' + res.status;
+  const err = new Error(res.status === 404
+    ? '드라이브에서 그 파일을 찾을 수 없어요.'
+    : '드라이브에서 받지 못했어요: ' + reason);
+  err.status = res.status;
+  throw err;
 }
 
-let pendingItems = [];
-
-async function renderPending(count){
-  const box = $('#pendingList');
-  if(!count){ box.innerHTML = ''; pendingItems = []; return; }
-  try{ pendingItems = (await api('/api/sheets/pending')).items; }
-  catch(e){ box.innerHTML = ''; return; }
-  box.innerHTML = `
-    <div class="mrow" style="border-top:1px solid var(--line);margin-top:10px">
-      <div class="mi">
-        <div class="me">드라이브에 올릴 악보 ${pendingItems.length}개</div>
-        <div class="mm">${esc(pendingItems.map(s => s.title).join(', ')).slice(0, 200)}</div>
-      </div>
-      <button class="ghost" id="pushPending">지금 올리기</button>
-    </div>`;
-  $('#pushPending').onclick = pushPending;
+async function fillSheetSettings(st){
+  const total = st.driveIndexCount || 0;
+  if(!total){ $('#importCard').hidden = true; return; }   // 가져올 것이 없으면 카드를 숨긴다
+  $('#importCard').hidden = false;
+  try{ const r = await api('/api/drive/todo'); importTodo = r.items; }
+  catch(e){ importTodo = []; }
+  $('#sheetState').textContent = importTodo.length ? `${importTodo.length}개 남음` : '모두 옮겼어요';
+  $('#sheetState').className = 'badge' + (importTodo.length ? '' : ' on');
+  $('#importDrive').disabled = !importTodo.length;
+  $('#sheetMeta').textContent = importTodo.length
+    ? `드라이브 악보 ${total}개 중 ${total - importTodo.length}개를 옮겼어요.`
+    : `드라이브 악보 ${total}개를 모두 서버로 옮겼어요. 이제 악보는 서버에 직접 올립니다.`;
 }
 
-/* 팀원이 올려 서버에만 있는 악보를 드라이브로 보낸다(브라우저가 올리고 서버에 알려 준다). */
-async function pushPending(){
-  const btn = $('#pushPending'), msg = $('#sheetMsg');
-  const cfg = await sheetConfig();
-  msg.className = 'msg';
-  if(!cfg.folderId){ msg.className = 'msg err'; msg.textContent = '먼저 악보 폴더를 골라 주세요.'; return; }
-  btn.disabled = true;
-  let ok = 0;
+/* 드라이브에서 받아 서버에 올린다. 파일 이름에서 확장자를 떼어 곡 제목으로 쓴다. */
+function titleFromName(name){
+  return String(name || '').replace(/\.(pdf|png|jpe?g|gif|webp)$/i, '').trim() || '악보';
+}
+
+$('#importDrive').onclick = async e => {
+  const btn = e.currentTarget, msg = $('#sheetMsg');
+  btn.disabled = true; msg.className = 'msg'; msg.textContent = '';
+  let ok = 0, fail = 0;
   try{
-    for(const s of pendingItems){
-      msg.textContent = `${s.title} 올리는 중… (${ok + 1}/${pendingItems.length})`;
-      const res = await fetch(`/api/sheets/${s.id}/file`, {credentials: 'same-origin'});
-      if(!res.ok) throw new Error(`${s.title}의 악보 파일을 읽지 못했어요.`);
-      const up = await driveUpload(cfg.folderId, s.name || s.title, await res.blob());
-      await api(`/api/sheets/${s.id}/drive`, {method: 'POST', body: {driveFileId: up.id, driveName: up.name}});
-      ok++;
+    await getToken(DRIVE_SCOPE);   // 동의 창을 한 번만 띄운다
+    for(const f of importTodo.slice()){
+      msg.textContent = `${f.name} 가져오는 중… (${ok + fail + 1}/${importTodo.length})`;
+      try{
+        const blob = await driveDownload(f.driveFileId);
+        const fd = new FormData();
+        fd.append('title', titleFromName(f.name));
+        fd.append('fileName', f.name);
+        fd.append('file', blob, f.name);
+        await apiForm('/api/sheets', fd);
+        ok++;
+      }catch(err){
+        fail++;
+        if(err.status === 401 || err.status === 403) throw err;   // 권한이면 더 해도 소용없다
+      }
     }
-    msg.textContent = `${ok}개를 드라이브에 올렸어요.`;
-  }catch(e){ msg.className = 'msg err'; msg.textContent = `${ok}개까지 올렸어요. ${e.message}`; }
-  finally{
+    msg.className = fail ? 'msg err' : 'msg';
+    msg.textContent = fail ? `${ok}개를 옮겼고 ${fail}개는 실패했어요. 다시 누르면 남은 것부터 이어서 해요.`
+      : `${ok}개를 모두 서버로 옮겼어요.`;
+  }catch(err){
+    msg.className = 'msg err';
+    msg.textContent = `${ok}개까지 옮겼어요. ${err.message}`;
+  }finally{
     btn.disabled = false;
-    try{ fillSheetSettings(await api('/api/settings')); }catch(_){}
+    try{ await fillSheetSettings(await api('/api/settings')); }catch(_){}
   }
-}
-
-$('#pickFolder').onclick = async e => {
-  const btn = e.currentTarget, msg = $('#sheetMsg');
-  btn.disabled = true; msg.className = 'msg'; msg.textContent = '';
-  try{
-    const doc = await pickFolder();
-    if(doc){
-      fillSheetSettings(await api('/api/settings', {method: 'PUT',
-        body: {sheetFolderId: doc.id, sheetFolderName: doc.name || ''}}));
-      msg.textContent = `새 악보는 ‘${doc.name || '고른 폴더'}’에 올려요.`;
-    }
-  }catch(err){ msg.className = 'msg err'; msg.textContent = err.message; }
-  finally{ btn.disabled = false; }
 };
 
-/* 쓸 악보를 Picker에서 고른다. 고른 파일에만 권한이 생기므로 이 단계가 꼭 필요하다. */
-$('#syncIndex').onclick = async e => {
-  const btn = e.currentTarget, msg = $('#sheetMsg');
-  btn.disabled = true; msg.className = 'msg'; msg.textContent = '';
-  try{
-    const docs = await pickSheetFiles({multi: true});
-    if(docs && docs.length){
-      msg.textContent = '목록에 넣는 중…';
-      const r = await indexPicked(docs);
-      fillSheetSettings(await api('/api/settings'));
-      msg.className = 'msg';
-      msg.textContent = `악보 ${r.added}개를 골랐어요. 이제 쓸 수 있는 악보는 모두 ${r.count}개예요.`;
-    }else if(docs){
-      msg.textContent = '고른 악보가 없어요.';
-    }
-  }catch(err){ msg.className = 'msg err'; msg.textContent = err.message; }
-  finally{ btn.disabled = false; }
-};
 
 function renderMembers(list){
   const box = $('#memberList');

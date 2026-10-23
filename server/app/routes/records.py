@@ -12,9 +12,10 @@ from datetime import date, datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from .. import sheets
-from ..auth import current_user, get_db
+from ..auth import current_user, get_db, get_settings
+from ..config import Settings
 from ..jobs import KST
-from .admin import setlist_item
+from .setlists import setlist_item
 
 router = APIRouter(prefix='/api/records')
 
@@ -128,7 +129,8 @@ def _select(base: str, text_exprs: list[str], toks: list[dict]) -> tuple[str, li
 
 # ---------- 목록 ----------
 
-SETLIST_SQL = 'SELECT playlist_id, title, url, ok, total, songs_json, created_at FROM setlists'
+SETLIST_SQL = ('SELECT share_token, title, url, ok, total, songs_json, created_by, created_at '
+               'FROM setlists')
 SHORTS_SQL = ('SELECT s.id, s.video_id, s.start_sec, s.end_sec, s.title, s.sermon_title, s.extra, s.created_by, '
               "s.created_at, COALESCE(t.text, '') <> '' AS has_transcript, u.name AS by_name "
               'FROM shorts s LEFT JOIN users u ON u.email = s.created_by '
@@ -146,11 +148,11 @@ def _setlists(db: sqlite3.Connection, toks: list[dict], user: dict) -> list[dict
         # 악보가 몇 곡에 붙었는지(메들리는 곡마다 하나씩 세므로 split_songs 기준).
         units = sum(len(sheets.split_songs(n)) for n in names if n)
         linked = sheets.count_linked(db, songs)
-        out.append({'kind': 'setlist', 'key': r['playlist_id'], 'title': r['title'], 'url': r['url'],
+        out.append({'kind': 'setlist', 'key': r['share_token'], 'title': r['title'], 'url': r['url'],
                     'at': r['created_at'], 'ok': r['ok'], 'total': r['total'],
                     'songs': [s for s in names if s][:30],
                     'sheetsLinked': linked, 'sheetsTotal': units,
-                    'canDelete': user['role'] == 'admin', **dates,
+                    'canDelete': user['role'] == 'admin' or r['created_by'] == user['email'], **dates,
                     '_where': _match_where(toks, [('제목', r['title']), ('곡 제목', ' / '.join(names)),
                                                   ('곡 메모', ' / '.join(notes))], [], dates)})
     return out
@@ -245,14 +247,16 @@ def list_records(kind: str = Query('all', pattern='^(all|setlist|shorts)$'), q: 
 # ---------- 상세 ----------
 
 @router.get('/setlist/{key}')
-def record_setlist(key: str, user: dict = Depends(current_user), db: sqlite3.Connection = Depends(get_db)):
-    """세트리스트 상세. 만드는 것은 관리자만 하지만, 보는 것은 팀원도 할 수 있다.
+def record_setlist(key: str, user: dict = Depends(current_user),
+                   db: sqlite3.Connection = Depends(get_db),
+                   settings: Settings = Depends(get_settings)):
+    """세트리스트 상세(키는 공유 토큰).
 
     쇼츠 상세는 이미 모두가 쓸 수 있는 GET /api/shorts/{id}를 그대로 쓴다.
     """
-    row = db.execute('SELECT * FROM setlists WHERE playlist_id = ?', (key,)).fetchone()
+    row = db.execute('SELECT * FROM setlists WHERE share_token = ?', (key,)).fetchone()
     if not row:
         raise HTTPException(404, '기록을 찾을 수 없어요.')
-    item = setlist_item(row, with_raw=user['role'] == 'admin', db=db)
-    item['canDelete'] = user['role'] == 'admin'
+    item = setlist_item(row, with_raw=user['role'] == 'admin', db=db, settings=settings)
+    item['canDelete'] = user['role'] == 'admin' or row['created_by'] == user['email']
     return item | _dates('setlist', row['title'], row['created_at'])

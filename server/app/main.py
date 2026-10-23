@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import auth, gemini, youtube
@@ -16,7 +16,7 @@ from .config import Settings
 from .db import connect, init_db, seed_admins
 from .auto import AutoRunner, clear_running, seed_auto_user
 from .jobs import JobRunner, mark_interrupted
-from .routes import admin, records, sheets, shorts
+from .routes import admin, records, setlists, sheets, shorts
 
 # 정적 파일 위치: 저장소 루트(web/, vendor/, fonts/). 컨테이너에서는 STATIC_ROOT로 지정한다.
 STATIC_ROOT = Path(os.environ.get('STATIC_ROOT') or Path(__file__).resolve().parents[2])
@@ -75,9 +75,21 @@ def create_app(settings: Settings | None = None,
     def config():
         return {'clientId': settings.google_client_id}
 
+    @app.get('/s/{token}')
+    def share_page(token: str):
+        """세트리스트 공유 페이지. 로그인 없이 누구나 — 내용은 /api/share/{token}에서 받는다.
+
+        아래 '/' 정적 마운트보다 먼저 등록해야 이 경로가 잡힌다.
+        """
+        path = STATIC_ROOT / 'web' / 'share.html'
+        if not path.is_file():
+            return JSONResponse({'detail': '공유 페이지를 찾을 수 없어요.'}, status_code=404)
+        return FileResponse(path, media_type='text/html')
+
     app.include_router(auth.router)
     app.include_router(shorts.router)
     app.include_router(records.router)
+    app.include_router(setlists.router)
     app.include_router(sheets.router)
     app.include_router(admin.router)
 

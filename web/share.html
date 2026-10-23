@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>예배팀 세트리스트</title>
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon.ico" sizes="48x48">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#d4652a">
+<meta name="description" content="이번 주 찬양과 악보">
+<meta name="robots" content="noindex, nofollow">
+<style>
+:root{
+  --bg:#f6f5f2; --card:#ffffff; --text:#1d1d1f; --muted:#6b6b70; --line:#e3e1dc;
+  --accent:#d6362f; --accent-text:#ffffff; --ok:#1f8a4c; --warn:#b26a00; --err:#c0392b;
+  --input:#fbfaf8;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#141416; --card:#1e1e21; --text:#f2f2f3; --muted:#9a9aa1; --line:#313136;
+    --accent:#ff4d44; --accent-text:#ffffff; --ok:#4cc27d; --warn:#f0a43a; --err:#ff6b5e;
+    --input:#18181b;
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,"Pretendard","Noto Sans KR","Apple SD Gothic Neo",sans-serif;
+  line-height:1.5}
+main{max-width:720px;margin:0 auto;padding:20px 16px 60px}
+h1{font-size:1.35rem;margin:4px 0 2px}
+.sub{color:var(--muted);font-size:.9rem;margin:0 0 18px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px}
+button,.btn{font:inherit;border:0;border-radius:10px;padding:11px 16px;cursor:pointer;
+  background:var(--accent);color:var(--accent-text);font-weight:600;text-decoration:none;
+  display:inline-flex;align-items:center;justify-content:center;gap:6px}
+button:disabled{opacity:.5;cursor:default}
+.btn.ghost,button.ghost{background:var(--input);color:var(--text);border:1px solid var(--line);font-weight:500}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.row>*{flex:1 1 auto}
+/* 플레이어: 16:9를 지키면서 폰 너비에 맞춘다 */
+.player{position:relative;width:100%;aspect-ratio:16/9;background:#000;border-radius:12px;overflow:hidden}
+.player iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
+.player .ph{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  color:#fff;font-size:.9rem;text-align:center;padding:16px}
+/* 곡 */
+.song{display:flex;gap:10px;align-items:flex-start;border-top:1px solid var(--line);padding:12px 0}
+.song:first-child{border-top:0}
+.song .no{flex:none;width:1.6em;text-align:right;color:var(--muted);font-variant-numeric:tabular-nums;
+  font-weight:700;padding-top:1px}
+.song .meta{flex:1;min-width:0}
+.song .name{font-weight:600;word-break:keep-all}
+.song.on .name{color:var(--accent)}
+.song .notes{font-size:.8rem;color:var(--muted);white-space:pre-wrap;word-break:break-word;margin-top:2px}
+.song .acts{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px}
+.song .acts .btn,.song .acts button{flex:0 0 auto;padding:5px 11px;font-size:.78rem}
+.song .bad{font-size:.78rem;color:var(--warn);margin-top:5px}
+.empty{color:var(--muted);text-align:center;padding:28px 10px}
+.foot{color:var(--muted);font-size:.78rem;text-align:center;margin-top:18px}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<main>
+  <h1 id="title">세트리스트</h1>
+  <p class="sub" id="sub">불러오는 중…</p>
+
+  <div id="body" hidden>
+    <div class="card">
+      <div class="player" id="playerBox">
+        <div class="ph" id="playerPh">‘전체 연속 재생’을 누르면 첫 곡부터 이어서 재생해요.</div>
+        <div id="player"></div>
+      </div>
+      <div class="row">
+        <button id="playAll">전체 연속 재생</button>
+        <a class="btn ghost" id="watchAll" target="_blank" rel="noopener" hidden>유튜브에서 연속 재생</a>
+      </div>
+      <div class="row" id="extra"></div>
+    </div>
+
+    <div class="card" id="songs"></div>
+    <p class="foot">링크를 아는 사람만 볼 수 있어요. 악보는 교회 안에서만 써 주세요.</p>
+  </div>
+
+  <div class="card empty" id="nope" hidden>찾을 수 없는 주소예요. 링크를 다시 확인해 주세요.</div>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const TOKEN = decodeURIComponent(location.pathname.replace(/^\/s\//, '').replace(/\/$/, ''));
+let DATA = null, player = null, playing = -1;
+const blocked = new Set();   // 임베드가 막힌 영상
+
+function esc(s){ return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+function fmtSize(n){
+  return !n ? '' : n < 1024 * 1024 ? Math.max(1, Math.round(n / 1024)) + 'KB'
+    : (n / 1024 / 1024).toFixed(1) + 'MB';
+}
+
+function songHtml(s, i){
+  const acts = [];
+  if(s.videoId) acts.push(`<button class="ghost play" data-i="${i}">▶ 재생</button>`);
+  for(const sh of (s.sheets || [])){
+    const label = (s.sheets.length > 1 ? sh.title + ' ' : '') + '악보';
+    acts.push(`<a class="btn ghost" href="${esc(sh.url)}">⬇ ${esc(label)}</a>`);
+  }
+  if(s.videoId) acts.push(`<a class="btn ghost" href="https://youtu.be/${esc(s.videoId)}"
+    target="_blank" rel="noopener">유튜브</a>`);
+  return `<div class="song" data-i="${i}">
+      <div class="no">${i + 1}</div>
+      <div class="meta">
+        <div class="name">${esc(s.name || '(제목 없음)')}</div>
+        ${(s.notes || []).length ? `<div class="notes">${esc(s.notes.join('\n'))}</div>` : ''}
+        <div class="acts">${acts.join('')}</div>
+        <div class="bad" hidden>이 영상은 외부 재생이 막혀 있어요. ‘유튜브’로 열어 주세요.</div>
+      </div>
+    </div>`;
+}
+
+function render(d){
+  document.title = d.title + ' · 예배팀';
+  $('#title').textContent = d.title;
+  $('#sub').textContent = [d.weekLabel, `${d.songs.length}곡`].filter(Boolean).join(' · ');
+  $('#songs').innerHTML = d.songs.map(songHtml).join('') || '<div class="empty">곡이 없어요.</div>';
+  $('#songs').querySelectorAll('.play').forEach(b => {
+    b.onclick = () => playFrom(+b.dataset.i);
+  });
+  if(d.watchAllUrl){ $('#watchAll').href = d.watchAllUrl; $('#watchAll').hidden = false; }
+  const extra = [];
+  if(d.sheetsZipUrl) extra.push(`<a class="btn ghost" href="${esc(d.sheetsZipUrl)}">악보 전체 받기</a>`);
+  if(d.playlistUrl) extra.push(`<a class="btn ghost" href="${esc(d.playlistUrl)}"
+    target="_blank" rel="noopener">유튜브 재생목록</a>`);
+  $('#extra').innerHTML = extra.join('');
+  $('#playAll').disabled = !d.songs.some(s => s.videoId);
+  $('#body').hidden = false;
+}
+
+/* ---------- 유튜브 플레이어 ----------
+   재생목록을 만들지 않고, 영상 ID 배열을 cuePlaylist로 큐에 넣어 이어서 재생한다.
+   구글 계정이 필요 없다. 임베드가 막힌 영상은 onError(101·150)로 와서 건너뛴다. */
+let apiReady = null;
+function loadApi(){
+  if(apiReady) return apiReady;
+  apiReady = new Promise((resolve, reject) => {
+    window.onYouTubeIframeAPIReady = resolve;
+    const s = document.createElement('script');
+    s.src = 'https://www.youtube.com/iframe_api';
+    s.onerror = () => { apiReady = null; reject(new Error('유튜브 플레이어를 불러오지 못했어요.')); };
+    document.head.appendChild(s);
+  });
+  return apiReady;
+}
+
+function ids(){ return DATA.songs.map(s => s.videoId).filter(Boolean); }
+
+function markPlaying(videoId){
+  playing = DATA.songs.findIndex(s => s.videoId === videoId);
+  $('#songs').querySelectorAll('.song').forEach(el => {
+    el.classList.toggle('on', +el.dataset.i === playing);
+  });
+}
+
+function markBlocked(i){
+  const el = $('#songs').querySelector(`.song[data-i="${i}"] .bad`);
+  if(el) el.hidden = false;
+}
+
+async function ensurePlayer(){
+  if(player) return player;
+  await loadApi();
+  $('#playerPh').hidden = true;
+  return new Promise(resolve => {
+    player = new YT.Player('player', {
+      host: 'https://www.youtube-nocookie.com',
+      playerVars: {playsinline: 1, rel: 0, modestbranding: 1},
+      events: {
+        onReady: () => resolve(player),
+        onStateChange: e => {
+          const d = e.target.getVideoData && e.target.getVideoData();
+          if(d && d.video_id) markPlaying(d.video_id);
+        },
+        onError: e => {
+          // 101·150 = 영상 소유자가 외부 재생을 막음. 건너뛰고 다음 곡으로.
+          const d = e.target.getVideoData && e.target.getVideoData();
+          const vid = d && d.video_id;
+          const i = DATA.songs.findIndex(s => s.videoId === vid);
+          if(i >= 0){ blocked.add(vid); markBlocked(i); }
+          try{ e.target.nextVideo(); }catch(_){}
+        }
+      }
+    });
+  });
+}
+
+async function playFrom(i){
+  const list = ids();
+  const vid = DATA.songs[i] && DATA.songs[i].videoId;
+  const at = vid ? list.indexOf(vid) : 0;
+  const p = await ensurePlayer();
+  p.loadPlaylist({playlist: list, index: Math.max(0, at)});
+}
+
+$('#playAll').onclick = async e => {
+  // await 뒤에는 e.currentTarget이 null이 된다(이벤트 전달이 끝나서). 먼저 붙잡아 둔다.
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  try{ await playFrom(0); }
+  catch(err){ $('#playerPh').hidden = false; $('#playerPh').textContent = err.message; }
+  finally{ btn.disabled = false; }
+};
+
+(async function boot(){
+  if(!TOKEN){ $('#sub').textContent = ''; $('#nope').hidden = false; return; }
+  let res;
+  try{ res = await fetch('/api/share/' + encodeURIComponent(TOKEN)); }
+  catch(_){ $('#sub').textContent = '서버에 연결하지 못했어요. 잠시 뒤 다시 열어 주세요.'; return; }
+  if(!res.ok){ $('#sub').textContent = ''; $('#nope').hidden = false; return; }
+  DATA = await res.json();
+  render(DATA);
+})();
+</script>
+</body>
+</html>

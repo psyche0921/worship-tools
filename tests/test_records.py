@@ -18,9 +18,9 @@ def ms(y, m, d, hh=10):
 def add_setlist(db, key, title, at, songs=('주의 은혜라', '여기에 모인 우리'), raw=''):
     with db:
         db.execute(
-            'INSERT INTO setlists (playlist_id, title, url, ok, total, songs_json, raw_message, created_by, '
+            'INSERT INTO setlists (share_token, title, url, ok, total, songs_json, raw_message, created_by, '
             'created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            (key, title, f'https://www.youtube.com/playlist?list={key}', len(songs), len(songs),
+            (key, title, '', len(songs), len(songs),
              json.dumps([{'id': 'dQw4w9WgXcQ', 'name': n, 'notes': ['KEY - A']} for n in songs],
                         ensure_ascii=False),
              raw, ADMIN, at))
@@ -71,7 +71,7 @@ def test_member_can_read_setlist_records(client, db, add_member):
     one = client.get(f'/api/records/setlist/{PID}').json()
     assert one['title'] == 'Setlist 261115' and len(one['songs']) == 2
     assert 'rawMessage' not in one  # 원본 메시지는 관리자만
-    assert client.get('/api/setlists').status_code == 403  # 관리자 전용 API는 그대로 막힌다
+    assert client.get('/api/setlists').status_code == 200  # 세트리스트는 팀원도 쓴다
 
 
 def test_admin_detail_has_raw_message(client, db):

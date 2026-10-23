@@ -128,6 +128,30 @@ MIGRATIONS = [
     );
     CREATE INDEX drive_index_key ON drive_index(name_key);
     """,
+    # 유튜브 재생목록을 더 만들지 않는다(공유 페이지가 연속 재생한다. docs/setlist-share.md).
+    # 기록의 키를 재생목록 ID에서 공유 토큰으로 바꾼다. 예전 행에는 임의 토큰을 채운다.
+    """
+    CREATE TABLE setlists_new (
+      id INTEGER PRIMARY KEY,
+      share_token TEXT NOT NULL UNIQUE,
+      title TEXT NOT NULL,
+      playlist_id TEXT UNIQUE,
+      url TEXT NOT NULL DEFAULT '',
+      ok INTEGER NOT NULL DEFAULT 0,
+      total INTEGER NOT NULL DEFAULT 0,
+      songs_json TEXT NOT NULL,
+      raw_message TEXT NOT NULL DEFAULT '',
+      created_by TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+    INSERT INTO setlists_new
+      (id, share_token, title, playlist_id, url, ok, total, songs_json, raw_message, created_by, created_at)
+      SELECT id, lower(hex(randomblob(16))), title, playlist_id, url, ok, total,
+             songs_json, raw_message, created_by, created_at FROM setlists;
+    DROP TABLE setlists;
+    ALTER TABLE setlists_new RENAME TO setlists;
+    CREATE INDEX setlists_created ON setlists(created_at DESC);
+    """,
 ]
 
 

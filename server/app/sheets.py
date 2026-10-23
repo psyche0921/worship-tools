@@ -77,44 +77,45 @@ def sheet_dict(row: sqlite3.Row) -> dict:
     return {
         'id': row['id'], 'title': row['title'], 'songKey': row['song_key'],
         'name': row['drive_name'] or (row['title'] + EXT_OF.get(row['mime'], '')),
-        'mime': row['mime'], 'size': row['size'], 'sync': row['sync'],
-        'syncError': row['sync_error'], 'driveFileId': row['drive_file_id'],
+        'mime': row['mime'], 'size': row['size'],
         'hasFile': bool(row['file_path']), 'at': row['updated_at'], 'by': row['created_by'],
     }
 
 
-DRIVE_COLS = 'file_id, name, name_key, mime, size, modified_at FROM drive_index'
+SHEET_COLS = 'id, title, song_key, drive_name, mime, size, file_path, updated_at FROM sheets'
 
 
 def _cand(row: sqlite3.Row, score: float) -> dict:
-    return {'driveFileId': row['file_id'], 'name': row['name'], 'mime': row['mime'],
-            'size': row['size'], 'modifiedAt': row['modified_at'], 'score': score}
+    return {'sheetId': row['id'], 'title': row['title'],
+            'name': row['drive_name'] or (row['title'] + EXT_OF.get(row['mime'], '')),
+            'mime': row['mime'], 'size': row['size'], 'at': row['updated_at'], 'score': score}
 
 
 def candidates(db: sqlite3.Connection, key: str, limit: int = MAX_CANDIDATES) -> list[dict]:
-    """드라이브 목록 캐시에서 악보 후보를 찾는다.
+    """**이미 올라온 악보** 중에서 이 곡에 쓸 만한 것을 찾는다.
 
-    파일 이름에 규칙이 없으므로(번호·작곡자·날짜가 섞임) 먼저 '곡 키가 이름에 들어 있는지'를
-    보고, 그래도 없으면 글자 유사도로 비슷한 이름을 보여 준다.
+    같은 곡이 다시 세트리스트에 나오면 `find_sheet`가 바로 붙이고, 제목이 조금 다르면
+    여기서 후보로 보여 준다(사용자가 고르면 별칭이 생겨 다음부터 자동으로 붙는다).
+    먼저 '곡 키가 들어 있는지'를 보고, 없으면 글자 유사도로 비슷한 것을 보여 준다.
     """
     if not key:
         return []
     rows = db.execute(
-        f'SELECT {DRIVE_COLS} WHERE instr(name_key, ?) > 0 '
-        'ORDER BY length(name_key), modified_at DESC LIMIT ?', (key, limit),
+        f'SELECT {SHEET_COLS} WHERE song_key <> ? AND instr(song_key, ?) > 0 '
+        'ORDER BY length(song_key), updated_at DESC LIMIT ?', (key, key, limit),
     ).fetchall()
     if rows:
-        return [_cand(r, 1.0 if r['name_key'] == key else 0.9) for r in rows]
+        return [_cand(r, 0.9) for r in rows]
 
     scored = []
-    for r in db.execute(f'SELECT {DRIVE_COLS}'):
-        m = difflib.SequenceMatcher(None, key, r['name_key'])
+    for r in db.execute(f'SELECT {SHEET_COLS}'):
+        m = difflib.SequenceMatcher(None, key, r['song_key'])
         if m.real_quick_ratio() < SIM_MIN or m.quick_ratio() < SIM_MIN:
             continue
         ratio = m.ratio()
         if ratio >= SIM_MIN:
             scored.append((ratio, r))
-    scored.sort(key=lambda p: (-p[0], p[1]['name']))
+    scored.sort(key=lambda p: (-p[0], p[1]['title']))
     return [_cand(r, round(ratio, 3)) for ratio, r in scored[:limit]]
 
 

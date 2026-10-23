@@ -1,12 +1,11 @@
-"""관리자 전용: 세트리스트 기록, 설정(SKILL.md·모델·자동 기획), 팀원 관리.
+"""관리자 전용: 설정(SKILL.md·모델·자동 기획)과 팀원 관리.
 
-세트리스트 항목도 v1의 hist.setlist와 같은 모양이다(key=재생목록 ID, title, url, at, ok, total, songs).
+세트리스트 기록은 routes/setlists.py로 옮겼다(팀원도 만들 수 있게 되었다).
 """
-import json
 import re
 import sqlite3
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from ..auth import get_db, get_settings, require_admin
@@ -21,86 +20,6 @@ EMAIL = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
 MODEL = re.compile(r'^[\w.\-]{1,100}$')
 
 
-# ---------- 세트리스트 ----------
-
-class SongSheet(BaseModel):
-    """그 곡에 연결한 악보. 메들리는 곡마다 하나씩이라 목록이다."""
-    sheetId: int = Field(ge=1)
-    title: str = Field('', max_length=300)
-
-
-class Song(BaseModel):
-    id: str = Field(pattern=r'^[\w-]{11}$')
-    name: str = Field('', max_length=300)
-    notes: list[str] = Field(default_factory=list, max_length=50)
-    sheets: list[SongSheet] = Field(default_factory=list, max_length=10)
-
-
-class SetlistIn(BaseModel):
-    playlistId: str = Field(pattern=r'^[\w-]{10,64}$')
-    title: str = Field(min_length=1, max_length=150)
-    url: str = Field(max_length=300)
-    ok: int = Field(ge=0)
-    total: int = Field(ge=0)
-    songs: list[Song] = Field(max_length=200)
-    rawMessage: str = Field('', max_length=50000)
-
-
-def setlist_item(row: sqlite3.Row, with_raw: bool = False,
-                 db: sqlite3.Connection | None = None) -> dict:
-    songs = json.loads(row['songs_json'])
-    if db is not None:
-        sheets.resolve_songs(db, songs)  # 저장된 sheetId, 없으면 곡 제목으로 지금 악보를 찾는다
-    item = {'key': row['playlist_id'], 'title': row['title'], 'url': row['url'], 'at': row['created_at'],
-            'ok': row['ok'], 'total': row['total'], 'songs': songs}
-    if with_raw:
-        item['rawMessage'] = row['raw_message']
-    return item
-
-
-@router.get('/setlists')
-def list_setlists(before: int | None = None, limit: int = Query(20, ge=1, le=100),
-                  db: sqlite3.Connection = Depends(get_db)):
-    rows = db.execute(
-        'SELECT * FROM setlists WHERE created_at < ? ORDER BY created_at DESC, id DESC LIMIT ?',
-        (before if before is not None else 2**62, limit + 1),
-    ).fetchall()
-    return {'items': [setlist_item(r) for r in rows[:limit]], 'more': len(rows) > limit}
-
-
-@router.get('/setlists/{key}')
-def get_setlist(key: str, db: sqlite3.Connection = Depends(get_db)):
-    row = db.execute('SELECT * FROM setlists WHERE playlist_id = ?', (key,)).fetchone()
-    if not row:
-        raise HTTPException(404, '기록을 찾을 수 없어요.')
-    return setlist_item(row, with_raw=True, db=db)
-
-
-@router.post('/setlists')
-def save_setlist(body: SetlistIn, user: dict = Depends(require_admin), db: sqlite3.Connection = Depends(get_db)):
-    songs = json.dumps([s.model_dump() for s in body.songs], ensure_ascii=False)
-    with db:
-        # 같은 재생목록을 다시 저장하면(곡 추가 재시도 등) 내용만 바꾸고 처음 만든 시각은 둔다.
-        db.execute(
-            'INSERT INTO setlists (playlist_id, title, url, ok, total, songs_json, raw_message, created_by, created_at) '
-            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(playlist_id) DO UPDATE SET '
-            'title = excluded.title, url = excluded.url, ok = excluded.ok, total = excluded.total, '
-            'songs_json = excluded.songs_json, raw_message = excluded.raw_message',
-            (body.playlistId, body.title, body.url, body.ok, body.total, songs, body.rawMessage,
-             user['email'], now_ms()),
-        )
-    return get_setlist(body.playlistId, db)
-
-
-@router.delete('/setlists/{key}')
-def delete_setlist(key: str, db: sqlite3.Connection = Depends(get_db)):
-    with db:
-        n = db.execute('DELETE FROM setlists WHERE playlist_id = ?', (key,)).rowcount
-    if not n:
-        raise HTTPException(404, '기록을 찾을 수 없어요.')
-    return {'ok': True}
-
-
 # ---------- 설정 ----------
 
 class SettingsIn(BaseModel):
@@ -108,8 +27,6 @@ class SettingsIn(BaseModel):
     model: str | None = Field(None, max_length=100)
     channel: str | None = Field(None, max_length=200)
     autoEnabled: bool | None = None
-    sheetFolderId: str | None = Field(None, max_length=100)
-    sheetFolderName: str | None = Field(None, max_length=200)
 
 
 @router.get('/settings')
@@ -126,14 +43,8 @@ def read_settings(db: sqlite3.Connection = Depends(get_db), settings: Settings =
         'autoEnabled': (get_setting(db, 'auto_enabled') or '') == '1',
         'autoLast': last_run(db),
         'youtubeKeySet': bool(settings.youtube_api_key),
-        # 악보: 드라이브 폴더와 목록 캐시 상태. 폴더 고르기(Picker)에 쓰는 키도 여기서만 내려준다.
-        'sheetFolderId': get_setting(db, 'sheet_folder_id') or '',
-        'sheetFolderName': get_setting(db, 'sheet_folder_name') or '',
-        'pickerKey': settings.google_picker_key,
-        'pickerAppId': settings.google_picker_app_id,
-        'driveIndexAt': int(get_setting(db, 'drive_index_at') or 0) or None,
+        # 악보: 드라이브에서 가져올 것이 남았는지(한시적). 다 옮기면 0이 되고 카드가 사라진다.
         'driveIndexCount': sheets.index_count(db),
-        'sheetPending': int(db.execute("SELECT count(*) FROM sheets WHERE sync <> 'drive'").fetchone()[0]),
         'maxSheetMb': settings.max_sheet_mb,
     }
 
@@ -162,14 +73,6 @@ def write_settings(body: SettingsIn, user: dict = Depends(require_admin),
             set_setting(db, 'yt_channel', channel, user['email'])
         if body.autoEnabled is not None:
             set_setting(db, 'auto_enabled', '1' if body.autoEnabled else '', user['email'])
-        if body.sheetFolderId is not None:
-            folder = body.sheetFolderId.strip()
-            set_setting(db, 'sheet_folder_id', folder, user['email'])
-            if not folder:  # 폴더를 비우면 그 폴더에서 읽어 둔 목록도 뜻이 없다
-                db.execute('DELETE FROM drive_index')
-                db.execute("DELETE FROM settings WHERE key = 'drive_index_at'")
-        if body.sheetFolderName is not None:
-            set_setting(db, 'sheet_folder_name', body.sheetFolderName.strip(), user['email'])
     return read_settings(db, settings)
 
 
