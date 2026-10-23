@@ -17,15 +17,22 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-# 코드 심볼: A, Bm7, F#m, Gsus4, Ab/C, N.C.
-CHORD = re.compile(r'^[A-G](?:#|b)?(?:maj|min|m|M|dim|aug|sus|add)?\d{0,2}'
-                   r'(?:sus\d|add\d|dim|aug|\+|-)?(?:/[A-G](?:#|b)?)?$')
+# 코드 심볼: A, Bm7, F#m, Gsus4, Ab/C, Cmaj7, D-7(=Dm7), Am7b5, C(9), N.C.
+CHORD = re.compile(r'^(?:N\.?C\.?|[A-G][#b]?'
+                   r'(?:maj|min|m|M|dim|aug|sus|add|alt|[-+Δ°ø])*'
+                   r'(?:\d{1,2}|[#b]\d{1,2}|sus\d|add\d|dim|aug|[-+])*'
+                   r'(?:\([^)]*\))?'
+                   r'(?:/[A-G][#b]?)?)$')
 # 악보 글꼴(음표 글리프). 이 글꼴이 보이면 음표까지 좌표로 뽑아 볼 수 있다.
 MUSIC_FONTS = ('maestro', 'opus', 'bravura', 'emmentaler', 'sonata', 'petaluma', 'leland')
+# 제목 아래 저작권 줄. 가사가 아니라서 뺀다.
+CREDITS = re.compile(r'작사|작곡|편곡|번역|c\.?c\.?m|©|copyright|all rights', re.I)
+HANGUL = re.compile(r'[가-힣]')
 
 # 가리는 기준은 '글자를 읽을 수 있나'다. 1쪽에 이만큼의 글자가 있으면 글자 레이어가 있다고 본다.
 MIN_CHARS = 40
 COVER = 0.4       # 쪽의 이 비율을 넘는 이미지가 있으면 스캔한 쪽으로 본다
+ROW_TOL = 3       # 이 안(pt)에 있으면 같은 줄로 본다
 
 
 def page_text_items(page):
@@ -38,6 +45,24 @@ def page_text_items(page):
                 if text:
                     out.append((text, (span.get('font') or '').lower(),
                                 span['bbox'][0], span['bbox'][1]))
+    return out
+
+
+def text_rows(items):
+    """같은 y에 있는 조각을 x 순서로 한 줄로 묶는다.
+
+    악보 프로그램은 **가사를 음절마다 따로** 적는다(한 음절이 조각 하나). 묶지 않으면
+    가사가 한 글자씩 흩어져서 세어지지 않는다. 음표 글리프는 글자가 아니라서 뺀다.
+    """
+    rows = {}
+    for text, font, x, y in items:
+        if any(f in font for f in MUSIC_FONTS):
+            continue
+        rows.setdefault(round(y / ROW_TOL), []).append((x, text))
+    out = []
+    for key in sorted(rows):
+        parts = sorted(rows[key])
+        out.append({'tokens': [t for _x, t in parts], 'text': ''.join(t for _x, t in parts)})
     return out
 
 
@@ -76,18 +101,15 @@ def inspect(path, fitz):
             chars += page_chars
             kind = page_kind(page, page_chars)
             page_kinds[kind] += 1
+            fonts |= {f for _t, f, _x, _y in items if any(m in f for m in MUSIC_FONTS)}
             if kind != 'program':
                 continue
-            for text, font, _x, _y in items:
-                if any(f in font for f in MUSIC_FONTS):
-                    fonts.add(font)
-                    continue
-                for token in text.split():
-                    if CHORD.match(token) and len(token) <= 8:
-                        chords.append(token)
-                # 가사는 한글이 들어 있고 코드가 아닌 줄로 본다(한국어 찬양 기준).
-                if re.search(r'[가-힣]', text) and len(text) >= 2:
-                    lyrics.append(text)
+            for row in text_rows(items):
+                # 코드는 조각마다, 가사는 줄마다 센다(코드 줄에는 한글이 없고, 가사 줄의
+                # 조각은 음절이라 코드로 걸리지 않는다).
+                chords += [t for t in row['tokens'] if len(t) <= 10 and CHORD.match(t)]
+                if HANGUL.search(row['text']) and not CREDITS.search(row['text']):
+                    lyrics.append(row['text'])   # 제목·저작권 줄은 뺀다
         pages = doc.page_count
         # 쪽마다 가린 뒤 가장 많은 쪽을 그 파일의 종류로 본다(program이 반이면 program).
         kind = 'error' if not pages else (
