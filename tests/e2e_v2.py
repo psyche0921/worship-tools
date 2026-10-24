@@ -313,6 +313,47 @@ def main():
         assert api(spg, '/api/share/nope')['status'] == 404
         sctx.close()
 
+        # ---------- 카카오톡 인앱 브라우저 (안드로이드) ----------
+        # 인앱 브라우저는 youtube.com 링크를 앱으로 넘겨 주지 않는다. 앱을 직접 부르는
+        # 주소(intent://)로 바뀌어야 하고, '기본 브라우저로 열기' 안내가 보여야 한다.
+        kctx = browser.new_context(
+            viewport={'width': 390, 'height': 844},
+            user_agent='Mozilla/5.0 (Linux; Android 14; SM-S928N) AppleWebKit/537.36 '
+                       '(KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36 '
+                       'KAKAOTALK 25.4.1')
+        kpg = kctx.new_page()
+        kpg.on('pageerror', lambda e: errors.append('kakao: ' + str(e)))
+        kpg.route('**/www.youtube.com/iframe_api', lambda r: r.fulfill(
+            status=200, content_type='text/javascript', body=FAKE_YT))
+        kpg.route('**/i.ytimg.com/**', lambda r: r.abort())
+        kpg.goto(f'{base}/s/{token}')
+        kpg.wait_for_function("""() => { const a = document.querySelector('#ytApp');
+            return a && !a.hidden && a.href.startsWith('intent://'); }""")
+        href = kpg.get_attribute('#ytApp', 'href')
+        assert f'intent://www.youtube.com/watch?v={VIDEO}&list=TLGG3' in href, href
+        assert 'package=com.google.android.youtube' in href
+        assert 'S.browser_fallback_url=https%3A%2F%2Fwww.youtube.com%2Fwatch' in href
+        assert kpg.get_attribute('#ytApp', 'target') is None      # 빈 창을 남기지 않는다
+        assert kpg.is_visible('#outHint')
+        assert 'intent://' in kpg.locator('#songs .song').nth(1).locator('a.yt').get_attribute('href')
+        kctx.close()
+
+        # 아이폰은 youtube:// 스킴으로 앱을 부른다
+        ictx = browser.new_context(
+            viewport={'width': 390, 'height': 844},
+            user_agent='Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) '
+                       'AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 '
+                       'Safari/604.1 KAKAOTALK 25.4.1')
+        ipg = ictx.new_page()
+        ipg.on('pageerror', lambda e: errors.append('ios: ' + str(e)))
+        ipg.route('**/i.ytimg.com/**', lambda r: r.abort())
+        ipg.goto(f'{base}/s/{token}')
+        ipg.wait_for_function("""() => { const a = document.querySelector('#ytApp');
+            return a && !a.hidden && a.href.startsWith('youtube://'); }""")
+        assert ipg.get_attribute('#ytApp', 'href') == \
+            f'youtube://www.youtube.com/watch?v={VIDEO}&list=TLGG3'
+        ictx.close()
+
         # 쇼츠 기획 (서버 작업 + 폴링)
         pg.click('.tabs button[data-tab=shorts]')
         pg.fill('#liveUrl', f'https://www.youtube.com/live/{VIDEO}?si=abc')

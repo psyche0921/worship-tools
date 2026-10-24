@@ -37,6 +37,7 @@
 
 - **유튜브 재생목록을 만들지 않습니다.** 공유 페이지(`web/share.html`)가 `YT.Player`의 `loadPlaylist({playlist: [영상ID…]})`로 연속 재생합니다. 구글 계정도 OAuth도 필요 없습니다. 임베드가 막힌 영상은 `onError` 101·150으로 와서 건너뜁니다.
 - **휴대폰에서는 유튜브 앱으로 넘깁니다.** 페이지 안 플레이어는 백그라운드 재생이 안 되니, 공유 페이지의 첫 단추는 '유튜브 앱에서 연속 재생'(`#ytApp`)입니다. `GET /api/share/{token}/youtube`가 `watch_videos`를 리다이렉트 없이 불러 임시 재생목록 ID(`TLGG…`)를 꺼내고 `watch?v=…&list=TLGG…`를 돌려줍니다. **평범한 재생목록 주소여야 앱 링크로 앱이 열립니다** — `watch_videos` 주소를 그대로 주면 브라우저가 열립니다. 서버에서 한 시간 기억하고(`_LIST_CACHE`), 못 받아 오면 `watch_videos` 주소로 떨어집니다. 곡마다 있는 '유튜브' 링크에도 `&list=…&index=N`을 붙여 그 곡부터 이어서 재생합니다.
+- **카카오톡 인앱 브라우저는 `youtube.com` 링크를 앱으로 넘겨 주지 않습니다.** 그래서 휴대폰에서는 앱을 직접 부르는 주소로 바꿉니다(`web/share.html`의 `appUrl`) — 안드로이드는 `intent://…;package=com.google.android.youtube;S.browser_fallback_url=…;end`, 아이폰은 `youtube://…`(앱이 없으면 1.5초 뒤 웹으로). 앱 스킴은 `target`을 떼어 이 창에서 넘깁니다(새 창은 빈 창이 남습니다). 인앱 브라우저에서는 '기본 브라우저로 열기'(`kakaotalk://web/openExternal?url=…`)도 함께 보여 줍니다. e2e가 카카오톡 안드로이드·아이폰 UA로 확인합니다.
 - 기록의 키는 **공유 토큰**(`setlists.share_token`)입니다. 공유 주소가 곧 그 기록의 키입니다. 예전 재생목록은 `playlist_id`에 남아 있고 상세에서 링크로만 보여 줍니다.
 - 공개 경로는 `GET /s/{token}`(페이지), `GET /api/share/{token}`(JSON), `.../sheet/{id}`, `.../sheets.zip`입니다. **로그인을 걸지 않습니다** — 추측 불가능한 토큰이 유일한 자물쇠입니다. `GET /s/...` 라우트는 `/` 정적 마운트보다 **먼저** 등록해야 잡힙니다.
 - 악보 다운로드는 `setlist_sheets()`로 **그 세트리스트에 붙은 악보만** 돌려줍니다. 번호를 바꿔 다른 악보를 엿볼 수 없습니다.

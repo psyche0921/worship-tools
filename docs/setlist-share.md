@@ -34,6 +34,22 @@
 - 못 받아 왔거나(502) 서버가 느릴 때도 단추는 `watch_videos` 주소로 열립니다. 로그인도 API 키도 필요 없습니다.
 - 곡마다 있는 '유튜브' 링크도 받아 온 뒤에는 `&list=…&index=N`이 붙어 **그 곡부터 앱에서 이어서** 재생됩니다.
 
+#### 카카오톡에서 열면 앱 링크가 안 듣습니다 (2026-10-24)
+
+세트리스트는 카톡으로 보내니 대부분 **카카오톡 인앱 브라우저**에서 열립니다. 인앱 브라우저(WebView)는 `youtube.com` 주소를 앱으로 넘겨 주지 않아서, 평범한 재생목록 주소만으로는 웹 플레이어가 열립니다(주소를 크롬·사파리에 직접 넣으면 앱이 열리는 이유가 이것입니다).
+
+그래서 휴대폰에서는 **앱을 직접 부르는 주소**로 바꿔 둡니다(`web/share.html`의 `appUrl`).
+
+| 기기 | 주소 | 앱이 없으면 |
+| --- | --- | --- |
+| 안드로이드 | `intent://www.youtube.com/watch?v=…&list=…#Intent;scheme=https;package=com.google.android.youtube;S.browser_fallback_url=…;end` | `browser_fallback_url`로 웹이 열립니다 |
+| 아이폰 | `youtube://www.youtube.com/watch?v=…&list=…` | 아무 일도 안 일어나므로 1.5초 뒤 웹으로 보냅니다(`iosFallback`) |
+| PC | 그대로 `https://www.youtube.com/watch?…` | — |
+
+- 앱 스킴은 **새 창으로 열지 않습니다**(`target`을 떼어 둡니다). 새 창으로 열면 빈 창이 남습니다.
+- 그래도 앱이 안 열릴 때를 위해 인앱 브라우저(UA에 `KAKAOTALK`·`NAVER(inapp`·`Instagram`·`FBAN`·`Line/`)에서는 '기본 브라우저로 열기'(`#outHint`)를 함께 보여 줍니다. 카카오톡은 `kakaotalk://web/openExternal?url=…`로 바깥 브라우저를 띄워 줍니다.
+- e2e(`tests/e2e_v2.py`)에서 카카오톡 안드로이드 UA와 아이폰 UA로 각각 `intent://`·`youtube://`가 되는지 봅니다.
+
 ## 2. 세트리스트의 키가 바뀝니다
 
 지금 기록의 키는 재생목록 ID(`setlists.playlist_id`)입니다. 재생목록을 안 만들면 그 키가 없습니다. **키를 공유 토큰(`share_token`)으로 바꿉니다.** 공유 주소가 곧 그 기록의 키입니다.
