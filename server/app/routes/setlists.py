@@ -55,6 +55,7 @@ def setlist_item(row: sqlite3.Row, with_raw: bool = False,
             'playlistId': row['playlist_id'] or '', 'url': row['url'] or ''}
     if settings is not None:
         item['shareUrl'] = share_url(settings, row['share_token'])
+        item['scoreUrl'] = score_url(settings, row['share_token'])
     if with_raw:
         item['rawMessage'] = row['raw_message']
     return item
@@ -142,7 +143,9 @@ def share_payload(row: sqlite3.Row, db: sqlite3.Connection) -> dict:
             'name': song.get('name') or '',
             'titles': sheets.split_songs(song.get('name') or ''),
             'notes': notes,
-            'sheets': [{'title': s.get('title') or '', 'name': s.get('name') or '',
+            # id·version은 BBC Score가 쓴다(반복곡은 같은 id, 파일이 바뀌면 version이 바뀐다).
+            'sheets': [{'id': s['id'], 'version': s.get('version') or '',
+                        'title': s.get('title') or '', 'name': s.get('name') or '',
                         'mime': s.get('mime') or '', 'size': s.get('size') or 0,
                         'url': f"/api/share/{token}/sheet/{s['id']}"}
                        for s in song['sheets'] if s.get('hasFile')],
@@ -162,10 +165,16 @@ def share_payload(row: sqlite3.Row, db: sqlite3.Connection) -> dict:
     }
 
 
+def score_url(settings: Settings, token: str) -> str:
+    """BBC Score(악보 필기 앱)에서 이 세트리스트를 여는 주소. 앱 주소를 설정하지 않았으면 빈 값."""
+    return f'{settings.score_origin}/?s={token}' if settings.score_origin else ''
+
+
 @router.get('/share/{token}')
-def share(token: str, db: sqlite3.Connection = Depends(get_db)):
+def share(token: str, db: sqlite3.Connection = Depends(get_db),
+          settings: Settings = Depends(get_settings)):
     """로그인 없이 누구나. 토큰이 추측 불가능한 것이 유일한 자물쇠다."""
-    return share_payload(find(db, token), db)
+    return share_payload(find(db, token), db) | {'scoreUrl': score_url(settings, token)}
 
 
 # ---------- drdr가 새 세트리스트를 찾아 가는 목록 (비밀 키) ----------

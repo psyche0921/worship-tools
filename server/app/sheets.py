@@ -4,6 +4,7 @@
 제목으로 저절로 붙고, 제목이 조금 다르면 **이미 올라온 악보**를 후보로 보여 준다.
 """
 import difflib
+import hashlib
 import os
 import re
 import sqlite3
@@ -71,11 +72,17 @@ def find_sheet(db: sqlite3.Connection, key: str) -> sqlite3.Row | None:
     ).fetchone()
 
 
+def sheet_version(row: sqlite3.Row) -> str:
+    """악보 파일의 버전(BBC Score가 캐시와 필기 위치를 맞추는 데 쓴다). 내용이 같으면
+    같다 — 같은 파일을 다시 올려도 바뀌지 않는다. 해시를 아직 못 채웠으면 올린 시각."""
+    return (row['sha256'] or '')[:16] or f"t{row['updated_at']}"
+
+
 def sheet_dict(row: sqlite3.Row) -> dict:
     return {
         'id': row['id'], 'title': row['title'], 'songKey': row['song_key'],
         'name': row['file_name'] or (row['title'] + EXT_OF.get(row['mime'], '')),
-        'mime': row['mime'], 'size': row['size'],
+        'mime': row['mime'], 'size': row['size'], 'version': sheet_version(row),
         'hasFile': bool(row['file_path']), 'at': row['updated_at'], 'by': row['created_by'],
     }
 
@@ -201,6 +208,25 @@ def write_file(settings, sheet_id: int, ext: str, data: bytes) -> str:
     tmp.write_bytes(data)
     os.replace(tmp, path)
     return str(path)
+
+
+def file_hash(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def fill_sheet_hashes(conn: sqlite3.Connection) -> int:
+    """해시가 비어 있는 악보(마이그레이션 전에 올린 것)를 채운다. 서버 시작 때 한 번."""
+    rows = conn.execute("SELECT id, file_path FROM sheets WHERE sha256 = '' AND file_path <> ''").fetchall()
+    n = 0
+    for r in rows:
+        try:
+            digest = file_hash(Path(r['file_path']).read_bytes())
+        except OSError:
+            continue  # 파일이 없으면 받을 때 404가 나니 버전도 의미가 없다
+        with conn:
+            conn.execute('UPDATE sheets SET sha256 = ? WHERE id = ?', (digest, r['id']))
+        n += 1
+    return n
 
 
 def remove_file(path: str) -> None:

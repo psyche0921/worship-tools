@@ -58,6 +58,15 @@
 - 구글 드라이브 연동은 **2026-10-23에 완전히 제거했습니다**(악보 111개를 서버로 옮긴 뒤). `drive_index` 표, Picker 설정, 브라우저 OAuth 토큰 코드가 모두 없어졌습니다. 로그인은 Google **ID 토큰**만 씁니다(`google.accounts.id`).
 - `tools/check-sheets.py`는 악보 PDF가 프로그램 PDF인지 스캔인지 세어 봅니다(drdr 학습 1단계 비용 가늠용, `pip install pymupdf`).
 
+## BBC Score 연동 (찬양팀 악보 필기 앱)
+
+- BBC Score는 **별개 사이트·별개 저장소**입니다(`C:\Works\code\bbc_score`, 임시 주소 `https://score.ppsoft.kr`). 찬양팀이 세트리스트 악보 위에 각자 필기합니다. 이 사이트는 악보·세트리스트·찬양팀 명단의 원본이고, BBC Score가 **읽어 갑니다**.
+- **찬양팀**은 사이트 팀원(`users`)과 따로입니다(`team_members` 표, 설정 탭 '찬양팀' 카드, `GET/POST/DELETE /api/team`, 관리자 전용). 찬양팀원은 이 사이트에 로그인하지 않고 BBC Score에만 로그인합니다. 두 명단에 함께 있어도 됩니다.
+- 서버끼리 부르는 길: `GET /api/integration/team/{email}`, `GET /api/integration/setlists`(`routes/integration.py`). 세션이 아니라 헤더 `X-Score-Key`(= `SCORE_API_KEY`)로 막고, 키를 설정하지 않으면 404입니다.
+- 악보 버전: `sheets.sha256`(업로드 때 계산, 예전 악보는 서버 시작 때 `fill_sheet_hashes`가 채움). 공유 JSON의 `sheets[]`에 `id`와 `version`(해시 앞 16자)이 있습니다. BBC Score가 이것으로 반복곡을 알아보고(같은 id), 악보가 바뀌었는지(다른 version) 판단합니다. 같은 파일을 다시 올리면 버전이 그대로입니다.
+- `SCORE_ORIGIN`이 있으면 공유 페이지와 세트리스트 결과에 '찬양팀 악보 앱에서 열기'(`{SCORE_ORIGIN}/?s={token}`, JSON의 `scoreUrl`)가 생깁니다. 정식 도메인이 나오면 이 값을 바꿉니다.
+- 테스트는 `tests/test_score.py`. 연동 모양을 바꾸면 BBC Score의 `tests/conftest.py`(`FakeWorship`)도 함께 고칩니다.
+
 ## 자동 쇼츠 기획 (v2)
 
 - 매주 **월요일 오후 1시(KST)**, `app/auto.py`의 `AutoRunner`가 교회 유튜브 채널에서 그 주일 예배 영상을 찾아 설교 구간 찾기 → 쇼츠 기획 → 대본까지 돌립니다. 영상이 아직 없으면 저녁 6시까지 30분마다 다시 봅니다(5분마다 깨어나 `due()`로 판단하므로 서버를 껐다 켜도 그 주 안에서 따라잡습니다).

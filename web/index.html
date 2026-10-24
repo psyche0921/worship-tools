@@ -304,6 +304,18 @@ button.confirm{background:var(--err)!important;color:#fff!important;border-color
       <div class="row"><button class="ghost" id="addMember">팀원 추가</button></div>
       <div class="msg" id="memberMsg"></div>
     </div>
+
+    <div class="card">
+      <label>찬양팀 (BBC Score 악보 앱) <span class="badge" id="teamState">연동 안 됨</span></label>
+      <p class="hint" style="font-size:.85rem;color:var(--muted);margin:0 0 8px">찬양팀원은 이 사이트가 아니라 BBC Score에 Google 계정으로 로그인해서 세트리스트 악보에 각자 필기해요. 위의 팀원과 따로 관리하고, 둘 다에 넣어도 돼요. 빼면 BBC Score에서 다음 확인 때(몇 시간 안에) 로그아웃돼요.</p>
+      <div id="teamList"></div>
+      <div class="two field">
+        <div><label for="tEmail">이메일</label><input id="tEmail" type="email" placeholder="name@gmail.com" autocomplete="off"></div>
+        <div><label for="tName">이름 (선택)</label><input id="tName" placeholder="홍길동" autocomplete="off"></div>
+      </div>
+      <div class="row"><button class="ghost" id="addTeam">찬양팀원 추가</button></div>
+      <div class="msg" id="teamMsg"></div>
+    </div>
   </section>
   </div>
 </main>
@@ -525,7 +537,7 @@ function render(){
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 /* ---------- 공유 링크 결과 (생성 직후/기록 공용) ---------- */
-function playlistResultHtml(title, url){
+function playlistResultHtml(title, url, scoreUrl){
   return `<div class="result">
       <div class="rtitle">${esc(title)} · 링크를 아는 사람만</div>
       <input class="link" value="${esc(url)}" readonly>
@@ -533,7 +545,8 @@ function playlistResultHtml(title, url){
         <button class="copy">링크 복사</button>
         <button class="ghost share">카톡 등으로 공유</button>
       </div>
-      <div class="row"><a class="btn ghost" href="${esc(url)}" target="_blank" rel="noopener">공유 페이지 열기</a></div>
+      <div class="row"><a class="btn ghost" href="${esc(url)}" target="_blank" rel="noopener">공유 페이지 열기</a>${scoreUrl
+        ? `<a class="btn ghost" href="${esc(scoreUrl)}" target="_blank" rel="noopener">찬양팀 악보 앱에서 열기</a>` : ''}</div>
     </div>`;
 }
 function bindPlaylistResult(box, title, url){
@@ -567,7 +580,7 @@ async function createSetlist(bi, btn){
     }});
     const n = block.songs.reduce((a, s) => a + songSheets(s).length, 0);
     msg.textContent = `${block.songs.length}곡 · 악보 ${n}개 · 이 링크를 찬양팀에 보내면 돼요.`;
-    out.innerHTML = playlistResultHtml(title, it.shareUrl);
+    out.innerHTML = playlistResultHtml(title, it.shareUrl, it.scoreUrl);
     bindPlaylistResult(out, title, it.shareUrl);
     records.invalidate();
   }catch(e){
@@ -1697,7 +1710,7 @@ function setlistViewInto(box, it, opts = {}){
       <div class="block-head"><div class="vh-title" style="flex:1">${esc(it.title)}</div>
         ${opts.close ? '<button class="ghost close" style="padding:6px 12px;flex:none">닫기</button>' : ''}</div>
       <div class="vh-meta">${esc((it.dateLabel ? it.dateLabel + ' 예배 · ' : '') + fmtWhen(it.at) + ' 생성 · ' + it.total + '곡')}</div>
-      ${playlistResultHtml(it.title, it.shareUrl || '')}
+      ${playlistResultHtml(it.title, it.shareUrl || '', it.scoreUrl || '')}
       ${it.url ? `<div class="row"><a class="btn ghost" href="${esc(it.url)}" target="_blank" rel="noopener">예전 유튜브 재생목록</a></div>` : ''}
       ${sheetCount(it) ? `<div class="row"><a class="btn ghost" href="/api/sheets/zip/${encodeURIComponent(it.key)}">악보 전체 받기 (${sheetCount(it)})</a></div>` : ''}
       ${opts.del ? '<div class="row"><button class="ghost del" data-label="기록 삭제">기록 삭제</button></div>' : ''}
@@ -1778,13 +1791,35 @@ function renderMembers(list){
   });
 }
 
+function renderTeam(t){
+  const state = $('#teamState');
+  state.textContent = t.linked ? (t.scoreOrigin ? '연동됨' : '연동됨 · 앱 주소 없음') : '연동 안 됨';
+  const box = $('#teamList');
+  box.innerHTML = t.items.length ? t.items.map(m => `
+    <div class="mrow" data-email="${esc(m.email)}">
+      <div class="mi">
+        <div class="me">${esc(m.name || m.email)}<span class="badge">찬양팀</span>${m.siteRole ? '<span class="badge">사이트 팀원</span>' : ''}</div>
+        <div class="mm">${m.name ? esc(m.email) + ' · ' : ''}추가 ${fmtWhen(m.createdAt)}</div>
+      </div>
+      <button class="ghost" data-label="빼기">빼기</button>
+    </div>`).join('') : '<p class="vh-meta">아직 찬양팀원이 없어요.</p>';
+  box.querySelectorAll('.mrow button').forEach(b => {
+    const email = b.closest('.mrow').dataset.email;
+    twoStep(b, '뺄까요?', async () => {
+      try{ renderTeam(await api('/api/team/' + encodeURIComponent(email), {method: 'DELETE'})); }
+      catch(e){ const m = $('#teamMsg'); m.className = 'msg err'; m.textContent = e.message; }
+    });
+  });
+}
+
 async function loadAdmin(){
   adminLoaded = true;
   const msg = $('#settingsMsg');
   try{
-    const [st, members] = await Promise.all([api('/api/settings'), api('/api/members')]);
+    const [st, members, team] = await Promise.all([api('/api/settings'), api('/api/members'), api('/api/team')]);
     fillSettings(st);
     renderMembers(members);
+    renderTeam(team);
   }catch(e){ adminLoaded = false; msg.className = 'msg err'; msg.textContent = e.message; }
 }
 
@@ -1856,6 +1891,17 @@ $('#addMember').onclick = async e => {
     renderMembers(await api('/api/members', {method: 'POST', body: {email: $('#mEmail').value.trim(), name: $('#mName').value.trim()}}));
     $('#mEmail').value = ''; $('#mName').value = '';
     msg.textContent = '추가했어요. 이 이메일의 Google 계정으로 로그인할 수 있어요.';
+  }catch(err){ msg.className = 'msg err'; msg.textContent = err.message; }
+  finally{ btn.disabled = false; }
+};
+
+$('#addTeam').onclick = async e => {
+  const btn = e.currentTarget, msg = $('#teamMsg');
+  btn.disabled = true; msg.className = 'msg'; msg.textContent = '';
+  try{
+    renderTeam(await api('/api/team', {method: 'POST', body: {email: $('#tEmail').value.trim(), name: $('#tName').value.trim()}}));
+    $('#tEmail').value = ''; $('#tName').value = '';
+    msg.textContent = '추가했어요. 이 Google 계정으로 BBC Score에 로그인할 수 있어요.';
   }catch(err){ msg.className = 'msg err'; msg.textContent = err.message; }
   finally{ btn.disabled = false; }
 };

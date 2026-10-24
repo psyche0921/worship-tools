@@ -131,3 +131,45 @@ def remove_member(email: str, db: sqlite3.Connection = Depends(get_db)):
         db.execute('DELETE FROM users WHERE email = ?', (email.strip().lower(),))
     return list_members(db)
 
+
+
+# ---------- 찬양팀 (BBC Score) ----------
+# 사이트 팀원(users)과 따로 둔다. 찬양팀원은 이 사이트가 아니라 BBC Score(악보 필기 앱)에
+# 로그인하고, BBC Score 서버가 /api/integration/team/{email}로 명단을 확인한다.
+
+def list_team(db: sqlite3.Connection) -> list[dict]:
+    rows = db.execute('SELECT t.email, t.name, t.created_at, u.role FROM team_members t '
+                      'LEFT JOIN users u ON u.email = t.email ORDER BY t.created_at, t.email').fetchall()
+    return [{'email': r['email'], 'name': r['name'], 'createdAt': r['created_at'],
+             'siteRole': r['role'] or ''} for r in rows]
+
+
+@router.get('/team')
+def get_team(db: sqlite3.Connection = Depends(get_db), settings: Settings = Depends(get_settings)):
+    return {'items': list_team(db), 'scoreOrigin': settings.score_origin,
+            'linked': bool(settings.score_api_key)}
+
+
+@router.post('/team')
+def add_team(body: MemberIn, user: dict = Depends(require_admin),
+             db: sqlite3.Connection = Depends(get_db), settings: Settings = Depends(get_settings)):
+    email = body.email.strip().lower()
+    if not EMAIL.match(email):
+        raise HTTPException(400, '이메일 주소를 확인하세요.')
+    try:
+        with db:
+            db.execute('INSERT INTO team_members (email, name, created_by, created_at) VALUES (?, ?, ?, ?)',
+                       (email, body.name.strip(), user['email'], now_ms()))
+    except sqlite3.IntegrityError:
+        raise HTTPException(409, '이미 찬양팀에 있는 이메일이에요.')
+    return get_team(db, settings)
+
+
+@router.delete('/team/{email}')
+def remove_team(email: str, db: sqlite3.Connection = Depends(get_db),
+                settings: Settings = Depends(get_settings)):
+    with db:
+        cur = db.execute('DELETE FROM team_members WHERE email = ?', (email.strip().lower(),))
+    if not cur.rowcount:
+        raise HTTPException(404, '찬양팀에 없는 이메일이에요.')
+    return get_team(db, settings)

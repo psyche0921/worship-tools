@@ -131,6 +131,7 @@ function render(d){
     b.onclick = () => playFrom(+b.dataset.i);
   });
   const extra = [];
+  if(d.scoreUrl) extra.push(`<a class="btn ghost" href="${esc(d.scoreUrl)}">찬양팀 악보 앱에서 열기</a>`);
   if(d.sheetsZipUrl) extra.push(`<a class="btn ghost" href="${esc(d.sheetsZipUrl)}">악보 전체 받기</a>`);
   if(d.playlistUrl) extra.push(`<a class="btn ghost" href="${esc(d.playlistUrl)}"
     target="_blank" rel="noopener">유튜브 재생목록</a>`);

@@ -141,6 +141,8 @@ drdr가 **공유 JSON을 읽어 갑니다.** worship-tools가 밀어 넣지 않�
  "playlistUrl": "https://www.youtube.com/playlist?list=TLGG…"}
 ```
 
+- `sheets[]`의 `id`·`version`(2026-10-24 추가)은 BBC Score(찬양팀 악보 필기 앱)가 씁니다. `version`은 악보 파일 sha256의 앞 16자입니다. 같은 곡이 다른 주에 다시 나오면 `id`·`version`이 같고, 악보를 새 내용으로 다시 올리면 `version`만 바뀝니다. 필드를 더하기만 했으므로 drdr는 그대로 읽으면 됩니다.
+- `scoreUrl`(2026-10-24 추가, `SCORE_ORIGIN`이 있을 때만): BBC Score에서 이 세트리스트를 여는 주소.
 - `key`·`timeSignature`·`tempo`·`structure`는 단톡방 메모에서 서버가 뽑아 둡니다(`app/setlistmeta.py`). **조성·박자·BPM·구조 정답을 공짜로 얻는 자리**입니다(`docs/drdr-training.md` 5장).
 - `titles`는 메들리를 쪼갠 곡 이름입니다(`sheets`와 짝). 악보 하나가 곡 하나입니다.
 - `url`은 **상대 주소**입니다. drdr는 공유 주소의 origin을 붙여 씁니다.

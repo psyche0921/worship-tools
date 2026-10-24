@@ -80,19 +80,21 @@ def put_sheet(title: str = Form(max_length=300), file: UploadFile = File(),
     data, mime, ext = _read(file, settings.max_sheet_mb)
 
     name = (fileName.strip() or file.filename or '')[:300] or f'{title.strip()}{ext}'
+    digest = sh.file_hash(data)
     now = now_ms()
     old = db.execute('SELECT id, file_path FROM sheets WHERE song_key = ?', (key,)).fetchone()
     with db:
         if old is not None:
             sheet_id = int(old['id'])
             db.execute(
-                'UPDATE sheets SET title = ?, file_name = ?, mime = ?, size = ?, updated_at = ? '
-                'WHERE id = ?', (title.strip(), name, mime, len(data), now, sheet_id))
+                'UPDATE sheets SET title = ?, file_name = ?, mime = ?, size = ?, sha256 = ?, '
+                'updated_at = ? WHERE id = ?',
+                (title.strip(), name, mime, len(data), digest, now, sheet_id))
         else:
             cur = db.execute(
-                'INSERT INTO sheets (song_key, title, file_name, mime, size, created_by, '
-                'created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-                (key, title.strip(), name, mime, len(data), user['email'], now, now))
+                'INSERT INTO sheets (song_key, title, file_name, mime, size, sha256, created_by, '
+                'created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                (key, title.strip(), name, mime, len(data), digest, user['email'], now, now))
             sheet_id = int(cur.lastrowid)
     path = sh.write_file(settings, sheet_id, ext, data)
     alias = sh.song_key(name)

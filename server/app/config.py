@@ -22,6 +22,10 @@ class Settings:
     session_days: int = 30
     # drdr(채보 학습)가 새 세트리스트를 찾아 가는 목록의 비밀 키. 비우면 목록이 꺼진다
     drdr_feed_token: str = ''
+    # BBC Score(찬양팀 악보 필기 앱). 주소가 있으면 공유 페이지에 '악보 앱에서 열기'가 생기고,
+    # 키가 있으면 BBC Score 서버가 찬양팀 명단·세트리스트 목록을 읽어 갈 수 있다.
+    score_origin: str = ''
+    score_api_key: str = ''
 
     @property
     def cookie_secure(self) -> bool:
@@ -43,4 +47,6 @@ class Settings:
             daily_plan_limit=int(env('DAILY_PLAN_LIMIT', cls.daily_plan_limit)),
             session_days=int(env('SESSION_DAYS', cls.session_days)),
             drdr_feed_token=env('DRDR_FEED_TOKEN', ''),
+            score_origin=env('SCORE_ORIGIN', '').rstrip('/'),
+            score_api_key=env('SCORE_API_KEY', ''),
         )

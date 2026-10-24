@@ -186,6 +186,19 @@ MIGRATIONS = [
     DROP TABLE aliases_keep;
     DROP TABLE drive_index;
     """,
+    # BBC Score(악보 필기 앱) 연동. 악보 파일의 해시가 버전이다(같은 곡을 다시 올리면
+    # 필기 위치가 어긋날 수 있어서 앱이 알아채야 한다). 기존 파일은 서버 시작 때 채운다
+    # (sheets.fill_sheet_hashes). 찬양팀은 사이트 팀원(users)과 따로 둔다 — 찬양팀원은
+    # 이 사이트가 아니라 BBC Score에 로그인한다.
+    """
+    ALTER TABLE sheets ADD COLUMN sha256 TEXT NOT NULL DEFAULT '';
+    CREATE TABLE team_members (
+      email TEXT PRIMARY KEY,
+      name TEXT NOT NULL DEFAULT '',
+      created_by TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+    """,
 ]
 
 
