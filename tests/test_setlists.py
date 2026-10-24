@@ -226,3 +226,50 @@ def test_share_cannot_reach_other_sheets(client):
     assert client.get(f"/api/share/{token}/sheet/{other['id']}").status_code == 404
     # 로그인하지 않은 사람은 원래 경로로도 못 받는다
     assert client.get(f"/api/sheets/{other['id']}/file").status_code == 401
+
+
+# ---------- drdr가 찾아 가는 목록 ----------
+
+FEED_KEY = 'feed-secret-1234567890'
+
+
+@pytest.fixture
+def feed_client(settings, fake_gemini):
+    from fastapi.testclient import TestClient
+
+    from app.main import create_app
+    from conftest import ORIGIN, fake_verifier
+
+    settings.drdr_feed_token = FEED_KEY
+    app = create_app(settings, verify_token=fake_verifier, gemini_call=fake_gemini)
+    with TestClient(app, base_url=ORIGIN, headers={'Origin': ORIGIN}) as c:
+        yield c
+
+
+def test_drdr_feed_lists_new_setlists(feed_client):
+    login(feed_client, ADMIN)
+    first = make(feed_client)
+    second = make(feed_client, title='Setlist 261025')
+    feed_client.post('/api/auth/logout')
+    auth = {'Authorization': f'Bearer {FEED_KEY}'}
+
+    d = feed_client.get('/api/drdr/setlists', headers=auth).json()
+    assert [i['token'] for i in d['items']] == [first['shareToken'], second['shareToken']]
+    assert d['items'][1]['title'] == 'Setlist 261025' and d['items'][1]['songs'] == 2
+    assert d['items'][0]['shareUrl'].endswith('/s/' + first['shareToken'])
+    assert d['more'] is False
+    # since 다음 것만 (drdr는 마지막으로 본 시각을 기억한다)
+    after = feed_client.get('/api/drdr/setlists', params={'since': d['items'][0]['createdAt']}, headers=auth).json()
+    assert [i['token'] for i in after['items']] == [second['shareToken']]
+    page = feed_client.get('/api/drdr/setlists', params={'limit': 1}, headers=auth).json()
+    assert len(page['items']) == 1 and page['more'] is True
+
+
+def test_drdr_feed_needs_key(feed_client):
+    assert feed_client.get('/api/drdr/setlists').status_code == 401
+    assert feed_client.get('/api/drdr/setlists', headers={'Authorization': 'Bearer nope'}).status_code == 401
+
+
+def test_drdr_feed_is_off_without_key(client):
+    # 키를 두지 않은 서버에는 목록이 없다
+    assert client.get('/api/drdr/setlists', headers={'Authorization': f'Bearer {FEED_KEY}'}).status_code == 404

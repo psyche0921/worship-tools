@@ -147,6 +147,18 @@ drdr가 **공유 JSON을 읽어 갑니다.** worship-tools가 밀어 넣지 않�
 - **주의**: 세트리스트의 유튜브 링크는 **원곡**이고, `structure`는 **우리 팀 연주 계획**입니다. 둘이 맞지 않습니다(`docs/drdr-training.md` 3장). drdr는 `structure`를 원곡 영상의 반복 라벨로 쓰면 안 됩니다.
 - drdr 저장소 쪽 작업(이 JSON을 받아 채보 작업을 만들고 악보를 참고 자료로 붙이는 일)은 그 저장소에서 합니다.
 
+### 세트리스트를 만들면 drdr가 스스로 가져갑니다 (2026-10-24)
+
+관리자가 공유 주소를 drdr에 붙여 넣지 않아도 되게, drdr가 **새 세트리스트 목록을 읽어 갑니다** (여전히 밀어 넣지 않습니다).
+
+| 경로 | 권한 | 하는 일 |
+|---|---|---|
+| `GET /api/drdr/setlists?since=<ms>&limit=50` | `Authorization: Bearer <DRDR_FEED_TOKEN>` | `since`보다 나중에 만든 세트리스트를 오래된 순서로 `{items: [{token, title, songs, createdAt, shareUrl}], more}` |
+
+- 목록은 공유 토큰을 모두 담으므로 **비밀 키**를 겁니다. `deploy/.env`의 `DRDR_FEED_TOKEN`과 drdr의 `DRDR_WORSHIP_FEED_TOKEN`이 같은 값이어야 합니다. 비우면 목록이 꺼집니다(404)
+- drdr는 15분마다 묻고, 마지막으로 본 `createdAt`을 기억합니다. 곡 · 악보는 지금처럼 각 세트리스트의 공유 JSON에서 읽습니다
+- 악보는 곡 제목으로 그때그때 찾아 붙이므로 **나중에 올린 악보도** 공유 JSON에 나타납니다. drdr는 만든 지 14일 안의 세트리스트를 다시 읽어 새 곡 · 새 악보를 받습니다
+
 ## 6. 악보: 드라이브를 뗀다
 
 - 업로드는 서버로 바로 갑니다. `POST /api/sheets`에서 `driveFileId`·`driveName`을 없애고 `sheets.sync`는 쓰지 않습니다(칸은 남겨 두고 값은 항상 `'drive'`가 아니라 의미 없는 값).

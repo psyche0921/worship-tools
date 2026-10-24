@@ -20,6 +20,8 @@ class Settings:
     youtube_api_key: str = ''
     daily_plan_limit: int = 20
     session_days: int = 30
+    # drdr(채보 학습)가 새 세트리스트를 찾아 가는 목록의 비밀 키. 비우면 목록이 꺼진다
+    drdr_feed_token: str = ''
 
     @property
     def cookie_secure(self) -> bool:
@@ -40,4 +42,5 @@ class Settings:
             youtube_api_key=env('YOUTUBE_API_KEY', ''),
             daily_plan_limit=int(env('DAILY_PLAN_LIMIT', cls.daily_plan_limit)),
             session_days=int(env('SESSION_DAYS', cls.session_days)),
+            drdr_feed_token=env('DRDR_FEED_TOKEN', ''),
         )

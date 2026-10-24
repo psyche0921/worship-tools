@@ -11,7 +11,7 @@
 
 **v2 설계는 `docs/v2-design.md`에 있습니다.** 배포 대상은 170번 서버(`tstech@192.168.0.170`), 주소는 `https://bbc.ppsoft.kr`입니다. **세트리스트·공유 페이지의 최신 설계는 `docs/setlist-share.md`이고, v2-design.md와 어긋나면 그쪽이 기준입니다**(재생목록 폐지, 팀원도 세트리스트 사용, 악보는 서버 직접 업로드).
 
-**악보는 서버에 직접 올립니다(`docs/setlist-share.md`). `docs/sheets-design.md`의 구글 드라이브 연동 부분은 폐지되었고, 곡 제목 매칭·메들리 분리 설명만 유효합니다. 그 악보를 drdr 채보 학습의 정답지로 쓰는 설계는 `docs/drdr-training.md`에 있고, drdr는 공유 페이지의 JSON을 읽어 갑니다.**
+**악보는 서버에 직접 올립니다(`docs/setlist-share.md`). `docs/sheets-design.md`의 구글 드라이브 연동 부분은 폐지되었고, 곡 제목 매칭·메들리 분리 설명만 유효합니다. 그 악보를 drdr 채보 학습의 정답지로 쓰는 설계는 `docs/drdr-training.md`에 있고, drdr는 공유 페이지의 JSON을 읽어 갑니다. 세트리스트를 만들면 drdr가 `GET /api/drdr/setlists`(비밀 키 `DRDR_FEED_TOKEN`)로 스스로 찾아 갑니다(`docs/setlist-share.md` 5장).**
 
 ## v2 구조 (`v2` 브랜치, bbc.ppsoft.kr)
 

@@ -168,6 +168,36 @@ def share(token: str, db: sqlite3.Connection = Depends(get_db)):
     return share_payload(find(db, token), db)
 
 
+# ---------- drdr가 새 세트리스트를 찾아 가는 목록 (비밀 키) ----------
+
+FEED_MAX = 200
+
+
+@router.get('/drdr/setlists')
+def drdr_feed(request: Request, since: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=FEED_MAX),
+              db: sqlite3.Connection = Depends(get_db),
+              settings: Settings = Depends(get_settings)):
+    """drdr(채보 학습)가 세트리스트를 스스로 찾아 가는 목록(`docs/setlist-share.md` 5장).
+
+    세트리스트를 만들면 drdr가 몇 분 안에 이 목록에서 보고 공유 JSON을 읽어 간다 — 관리자가 공유 주소를
+    붙여 넣지 않아도 된다. 공유 토큰을 모두 담으므로 비밀 키(`DRDR_FEED_TOKEN`)를 건다.
+    키가 없으면 목록 자체가 없다(404). `since`(ms)보다 나중에 만든 것을 오래된 순서로.
+    """
+    key = settings.drdr_feed_token
+    if not key:
+        raise HTTPException(404, 'Not Found')
+    got = request.headers.get('authorization', '')
+    if not got.startswith('Bearer ') or not secrets.compare_digest(got[7:].encode(), key.encode()):
+        raise HTTPException(401, '키가 맞지 않아요.')
+    rows = db.execute(
+        'SELECT share_token, title, total, created_at FROM setlists WHERE created_at > ? '
+        'ORDER BY created_at, id LIMIT ?', (since, limit + 1)).fetchall()
+    return {'items': [{'token': r['share_token'], 'title': r['title'], 'songs': r['total'],
+                       'createdAt': r['created_at'], 'shareUrl': share_url(settings, r['share_token'])}
+                      for r in rows[:limit]],
+            'more': len(rows) > limit}
+
+
 # 영상 ID 목록 -> (만든 시각, 임시 재생목록 ID). 유튜브를 매번 부르지 않으려고 잠깐 둔다.
 _LIST_CACHE: dict[str, tuple[float, str]] = {}
 LIST_TTL = 3600.0
