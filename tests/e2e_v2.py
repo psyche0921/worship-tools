@@ -105,6 +105,11 @@ class FakeGemini:
         return SHORTS
 
 
+async def fake_temp_list(ids):
+    """유튜브에 묻지 않고 임시 재생목록 ID를 흉내 낸다(곡 수를 붙여 둔다)."""
+    return 'TLGG' + str(len(ids))
+
+
 def free_port():
     with socket.socket() as s:
         s.bind(('127.0.0.1', 0))
@@ -116,7 +121,8 @@ def start_v2(db_path, gem):
     settings = Settings(db_path=db_path, sheets_dir=str(pathlib.Path(db_path).parent / 'sheets'),
                         google_client_id='test.apps.googleusercontent.com',
                         admin_emails=[ADMIN], public_origin=f'http://127.0.0.1:{port}')
-    app = create_app(settings, verify_token=fake_verifier, gemini_call=gem)
+    app = create_app(settings, verify_token=fake_verifier, gemini_call=gem,
+                     yt_temp_list=fake_temp_list)
     server = uvicorn.Server(uvicorn.Config(app, host='127.0.0.1', port=port, log_level='warning'))
     threading.Thread(target=server.run, daemon=True).start()
     while not server.started:
@@ -278,7 +284,15 @@ def main():
         # 로그인 화면이 아니다
         assert spg.locator('#gsiBtn').count() == 0
 
-        # 전체 연속 재생: 재생목록을 만들지 않고 영상 ID 배열을 큐에 넣는다
+        # 유튜브 앱에서 연속 재생: 임시 재생목록으로 만든 평범한 재생목록 주소
+        spg.wait_for_function("""() => { const a = document.querySelector('#ytApp');
+            return a && !a.hidden && a.href.includes('list=TLGG3'); }""")
+        assert spg.get_attribute('#ytApp', 'href') ==             f'https://www.youtube.com/watch?v={VIDEO}&list=TLGG3'
+        # 곡마다 '유튜브'도 그 곡부터 앱에서 이어서 재생한다
+        second = spg.locator('#songs .song').nth(1).locator('a.yt')
+        assert 'list=TLGG3&index=2' in second.get_attribute('href')
+
+        # 이 페이지에서 재생: 재생목록을 만들지 않고 영상 ID 배열을 큐에 넣는다
         spg.click('#playAll')
         spg.wait_for_function("window.__cued && window.__cued.playlist.length === 3", timeout=15000)
         assert spg.evaluate('window.__cued.playlist')[0] == VIDEO

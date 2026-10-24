@@ -31,7 +31,8 @@ mimetypes.add_type('image/svg+xml', '.svg')
 def create_app(settings: Settings | None = None,
                verify_token: auth.TokenVerifier = auth.google_verifier,
                gemini_call: gemini.GeminiCall | None = None,
-               yt_fetch: youtube.Fetch | None = None) -> FastAPI:
+               yt_fetch: youtube.Fetch | None = None,
+               yt_temp_list: youtube.TempList | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
 
     @asynccontextmanager
@@ -57,6 +58,7 @@ def create_app(settings: Settings | None = None,
     app.state.gemini = gemini_call or gemini.make_client(settings.gemini_api_key)
     app.state.jobs = JobRunner(app)
     app.state.yt_fetch = yt_fetch or youtube.make_fetch()
+    app.state.yt_temp_list = yt_temp_list or youtube.make_temp_list()
     app.state.auto = AutoRunner(app)
 
     @app.middleware('http')

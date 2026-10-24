@@ -38,6 +38,7 @@ button:disabled{opacity:.5;cursor:default}
 .btn.ghost,button.ghost{background:var(--input);color:var(--text);border:1px solid var(--line);font-weight:500}
 .row{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
 .row>*{flex:1 1 auto}
+.hint{font-size:.78rem;color:var(--muted);margin:8px 2px 0}
 /* 플레이어: 16:9를 지키면서 폰 너비에 맞춘다 */
 .player{position:relative;width:100%;aspect-ratio:16/9;background:#000;border-radius:12px;overflow:hidden}
 .player iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
@@ -68,13 +69,14 @@ button:disabled{opacity:.5;cursor:default}
   <div id="body" hidden>
     <div class="card">
       <div class="player" id="playerBox">
-        <div class="ph" id="playerPh">‘전체 연속 재생’을 누르면 첫 곡부터 이어서 재생해요.</div>
+        <div class="ph" id="playerPh">‘이 페이지에서 재생’을 누르면 첫 곡부터 이어서 재생해요.</div>
         <div id="player"></div>
       </div>
       <div class="row">
-        <button id="playAll">전체 연속 재생</button>
-        <a class="btn ghost" id="watchAll" target="_blank" rel="noopener" hidden>유튜브에서 연속 재생</a>
+        <a class="btn" id="ytApp" target="_blank" rel="noopener" hidden>▶ 유튜브 앱에서 연속 재생</a>
+        <button id="playAll" class="ghost">이 페이지에서 재생</button>
       </div>
+      <p class="hint" id="ytHint" hidden>휴대폰에서 누르면 유튜브 앱이 열려요. 앱에서는 화면을 꺼도 계속 들립니다.</p>
       <div class="row" id="extra"></div>
     </div>
 
@@ -105,8 +107,8 @@ function songHtml(s, i){
     const label = (s.sheets.length > 1 ? sh.title + ' ' : '') + '악보';
     acts.push(`<a class="btn ghost" href="${esc(sh.url)}">⬇ ${esc(label)}</a>`);
   }
-  if(s.videoId) acts.push(`<a class="btn ghost" href="https://youtu.be/${esc(s.videoId)}"
-    target="_blank" rel="noopener">유튜브</a>`);
+  if(s.videoId) acts.push(`<a class="btn ghost yt" data-v="${esc(s.videoId)}"
+    href="https://youtu.be/${esc(s.videoId)}" target="_blank" rel="noopener">유튜브</a>`);
   return `<div class="song" data-i="${i}">
       <div class="no">${i + 1}</div>
       <div class="meta">
@@ -126,7 +128,6 @@ function render(d){
   $('#songs').querySelectorAll('.play').forEach(b => {
     b.onclick = () => playFrom(+b.dataset.i);
   });
-  if(d.watchAllUrl){ $('#watchAll').href = d.watchAllUrl; $('#watchAll').hidden = false; }
   const extra = [];
   if(d.sheetsZipUrl) extra.push(`<a class="btn ghost" href="${esc(d.sheetsZipUrl)}">악보 전체 받기</a>`);
   if(d.playlistUrl) extra.push(`<a class="btn ghost" href="${esc(d.playlistUrl)}"
@@ -134,9 +135,35 @@ function render(d){
   $('#extra').innerHTML = extra.join('');
   $('#playAll').disabled = !d.songs.some(s => s.videoId);
   $('#body').hidden = false;
+  loadYtList();
 }
 
-/* ---------- 유튜브 플레이어 ----------
+/* ---------- 유튜브 앱에서 연속 재생 ----------
+   서버가 유튜브에 임시 재생목록(TLGG…)을 만들게 하고 평범한 재생목록 주소를 돌려준다.
+   휴대폰에서 그 주소를 누르면 브라우저가 아니라 유튜브 앱이 열려서(앱 링크)
+   화면을 꺼도 계속 들린다. 받아오기 전에도, 못 받아도 watch_videos 주소로 열 수 있다. */
+async function loadYtList(){
+  const list = ids();
+  if(!list.length) return;
+  const btn = $('#ytApp');
+  btn.href = DATA.watchAllUrl || ('https://www.youtube.com/watch_videos?video_ids=' + list.join(','));
+  btn.hidden = false;
+  $('#ytHint').hidden = false;
+  let res;
+  try{ res = await fetch(`/api/share/${encodeURIComponent(TOKEN)}/youtube`); }
+  catch(_){ return; }
+  if(!res.ok) return;
+  const d = await res.json();
+  if(!d.listId) return;
+  btn.href = d.url;
+  // 곡마다 '유튜브'를 누르면 그 곡부터 앱에서 이어서 재생한다
+  document.querySelectorAll('#songs .yt').forEach(a => {
+    const at = list.indexOf(a.dataset.v);
+    if(at >= 0) a.href = `https://www.youtube.com/watch?v=${a.dataset.v}&list=${d.listId}&index=${at + 1}`;
+  });
+}
+
+/* ---------- 이 페이지의 유튜브 플레이어 ----------
    재생목록을 만들지 않고, 영상 ID 배열을 cuePlaylist로 큐에 넣어 이어서 재생한다.
    구글 계정이 필요 없다. 임베드가 막힌 영상은 onError(101·150)로 와서 건너뛴다. */
 let apiReady = null;

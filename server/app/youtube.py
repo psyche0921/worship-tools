@@ -41,6 +41,44 @@ def make_fetch() -> Fetch:
     return fetch
 
 
+# ---------- 임시 재생목록(휴대폰에서 유튜브 앱으로 연속 재생) ----------
+
+WATCH_VIDEOS = 'https://www.youtube.com/watch_videos?video_ids='
+TEMP_LIST = re.compile(r'[?&]list=(TLGG[\w-]+)')
+
+# 영상 ID 목록 -> 임시 재생목록 ID. 테스트에서는 app.state.yt_temp_list 를 가짜로 바꾼다.
+TempList = Callable[[list[str]], Awaitable[str]]
+
+
+def temp_list_id(location: str) -> str:
+    """`watch_videos`가 보낸 Location 헤더에서 임시 재생목록 ID(TLGG…)를 꺼낸다."""
+    m = TEMP_LIST.search(location or '')
+    if not m:
+        raise YoutubeError('유튜브가 임시 재생목록을 만들어 주지 않았어요.')
+    return m.group(1)
+
+
+def make_temp_list() -> TempList:
+    """영상 ID 목록 → 유튜브가 만들어 주는 임시 재생목록 ID(TLGG…).
+
+    `watch_videos?video_ids=…`는 303으로 `watch?v=…&list=TLGG…`로 보내 준다. 그 ID로
+    만든 주소는 **평범한 재생목록 주소**라서 휴대폰에서 누르면 유튜브 앱이 열린다(앱 링크).
+    앱에서 들으면 화면을 꺼도 계속 재생된다(프리미엄). 로그인도 API 키도 필요 없다.
+    """
+    async def temp_list(ids: list[str]) -> str:
+        headers = {'Accept-Language': 'ko', 'User-Agent': 'Mozilla/5.0 (worship-tools)'}
+        async with httpx.AsyncClient(timeout=httpx.Timeout(20, connect=10),
+                                     follow_redirects=False) as client:
+            try:
+                res = await client.get(WATCH_VIDEOS + ','.join(ids), headers=headers)
+            except httpx.HTTPError as e:
+                raise YoutubeError(f'유튜브에 연결하지 못했어요. ({type(e).__name__})')
+        if res.status_code >= 400:
+            raise YoutubeError(f'유튜브가 응답하지 않아요. (HTTP {res.status_code})')
+        return temp_list_id(res.headers.get('location', ''))
+    return temp_list
+
+
 def channel_url(channel: str, tab: str = '') -> str:
     """설정에 적은 채널(주소·핸들·UC아이디) → 채널 페이지 주소."""
     c = (channel or '').strip().rstrip('/')

@@ -147,6 +147,53 @@ def test_share_json_is_public(client):
     assert d['sheetsZipUrl'] == ''          # 악보가 없으면 빈 값
 
 
+def test_share_youtube_app_link(client, app):
+    """휴대폰에서 유튜브 앱으로 넘기려면 평범한 재생목록 주소가 필요하다."""
+    from app import youtube
+    from app.routes import setlists
+    setlists._LIST_CACHE.clear()
+    login(client, ADMIN)
+    token = make(client)['shareToken']
+    client.post('/api/auth/logout')
+
+    called = []
+
+    async def fake(ids):
+        called.append(ids)
+        return 'TLGGQbVhu-4ufWE'
+
+    app.state.yt_temp_list = fake
+    d = client.get(f'/api/share/{token}/youtube')
+    assert d.status_code == 200, d.text
+    d = d.json()
+    assert called == [['dQw4w9WgXcQ', 'aaaaaaaaaaa']]
+    assert d['listId'] == 'TLGGQbVhu-4ufWE'
+    assert d['url'] == 'https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=TLGGQbVhu-4ufWE'
+    assert d['playlistUrl'] == 'https://www.youtube.com/playlist?list=TLGGQbVhu-4ufWE'
+
+    client.get(f'/api/share/{token}/youtube')   # 잠깐 기억해 두고 다시 묻지 않는다
+    assert len(called) == 1
+
+    setlists._LIST_CACHE.clear()
+
+    async def boom(ids):
+        raise youtube.YoutubeError('유튜브가 임시 재생목록을 만들어 주지 않았어요.')
+
+    app.state.yt_temp_list = boom
+    bad = client.get(f'/api/share/{token}/youtube')
+    assert bad.status_code == 502 and '임시 재생목록' in bad.json()['detail']
+
+
+def test_temp_list_id_from_location():
+    from app import youtube
+    loc = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=TLGGQbVhu-4ufWEyNDEwMjAyNg'
+    assert youtube.temp_list_id(loc) == 'TLGGQbVhu-4ufWEyNDEwMjAyNg'
+    with pytest.raises(youtube.YoutubeError):
+        youtube.temp_list_id('https://www.youtube.com/watch?v=dQw4w9WgXcQ')
+    with pytest.raises(youtube.YoutubeError):
+        youtube.temp_list_id('')
+
+
 def test_share_unknown_token(client):
     assert client.get('/api/share/nope').status_code == 404
 

@@ -7,11 +7,12 @@
 import json
 import secrets
 import sqlite3
+import time
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from .. import sheets, setlistmeta
+from .. import sheets, setlistmeta, youtube
 from ..auth import current_user, get_db, get_settings
 from ..config import Settings
 from ..db import now_ms
@@ -165,3 +166,39 @@ def share_payload(row: sqlite3.Row, db: sqlite3.Connection) -> dict:
 def share(token: str, db: sqlite3.Connection = Depends(get_db)):
     """로그인 없이 누구나. 토큰이 추측 불가능한 것이 유일한 자물쇠다."""
     return share_payload(find(db, token), db)
+
+
+# 영상 ID 목록 -> (만든 시각, 임시 재생목록 ID). 유튜브를 매번 부르지 않으려고 잠깐 둔다.
+_LIST_CACHE: dict[str, tuple[float, str]] = {}
+LIST_TTL = 3600.0
+
+
+@router.get('/share/{token}/youtube')
+async def share_youtube(token: str, request: Request,
+                        db: sqlite3.Connection = Depends(get_db)):
+    """공유 페이지가 '유튜브 앱에서 연속 재생' 단추에 쓸 주소.
+
+    유튜브에 임시 재생목록(TLGG…)을 만들게 하고 평범한 재생목록 주소로 돌려준다.
+    휴대폰에서 이 주소를 누르면 브라우저가 아니라 **유튜브 앱**이 열려서 화면을 꺼도
+    계속 들린다. 로그인 없이 누구나(공유 토큰이 자물쇠).
+    """
+    row = find(db, token)
+    ids = [s.get('id') for s in json.loads(row['songs_json']) if s.get('id')]
+    if not ids:
+        raise HTTPException(404, '영상이 없어요.')
+    key = ','.join(ids)
+    hit = _LIST_CACHE.get(key)
+    if hit and time.time() - hit[0] < LIST_TTL:
+        list_id = hit[1]
+    else:
+        resolve = getattr(request.app.state, 'yt_temp_list', None) or youtube.make_temp_list()
+        try:
+            list_id = await resolve(ids)
+        except youtube.YoutubeError as e:
+            raise HTTPException(502, str(e))
+        _LIST_CACHE[key] = (time.time(), list_id)
+    return {
+        'listId': list_id,
+        'url': f'https://www.youtube.com/watch?v={ids[0]}&list={list_id}',
+        'playlistUrl': f'https://www.youtube.com/playlist?list={list_id}',
+    }
