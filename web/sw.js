@@ -2,7 +2,7 @@
 
    캐시는 '네트워크 우선'이다. 배포하면 바로 새 화면이 보이고, 인터넷이 없을 때만
    마지막으로 받은 것을 보여 준다. API 응답과 로그인은 캐시하지 않는다. */
-const CACHE = 'bbc-v1';
+const CACHE = 'bbc-v2';
 // 설치할 때 미리 받아 두는 것(아이콘·설정). 화면(index.html)은 늘 새로 받는다.
 const PRECACHE = ['/icon.svg', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png',
                   '/favicon.ico', '/manifest.webmanifest'];
@@ -28,7 +28,8 @@ self.addEventListener('fetch', e => {
   if(e.request.method !== 'GET' || skip(url)) return;
   e.respondWith((async () => {
     try{
-      const res = await fetch(e.request);
+      // 브라우저 HTTP 캐시도 건너뛰고 서버에 확인한다(바뀌지 않았으면 304라 가볍다).
+      const res = await fetch(e.request, {cache: 'no-cache'});
       if(res && res.ok && res.type === 'basic'){
         const copy = res.clone();
         caches.open(CACHE).then(c => c.put(e.request, copy)).catch(() => {});

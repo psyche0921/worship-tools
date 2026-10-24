@@ -69,7 +69,13 @@ def create_app(settings: Settings | None = None,
         if request.method not in SAFE_METHODS and request.url.path.startswith('/api/'):
             if request.headers.get('origin', '').rstrip('/') != settings.public_origin:
                 return JSONResponse({'detail': '허용되지 않은 요청이에요.'}, status_code=403)
-        return await call_next(request)
+        response = await call_next(request)
+        # 화면(HTML)과 서비스 워커는 늘 서버에 확인하게 한다. 없으면 브라우저가 예전 화면을
+        # 한동안 재사용해서 배포한 기능이 안 보인다(2026-10-24 찬양팀 카드가 그랬다).
+        ctype = response.headers.get('content-type', '')
+        if ctype.startswith('text/html') or request.url.path == '/sw.js':
+            response.headers['Cache-Control'] = 'no-cache'
+        return response
 
     @app.get('/api/health')
     def health():

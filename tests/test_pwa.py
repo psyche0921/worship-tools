@@ -41,3 +41,10 @@ def test_page_links_icons(client):
     for tag in ['rel="manifest"', 'href="/icon.svg"', 'rel="apple-touch-icon"',
                 'name="theme-color"']:
         assert tag in html, tag
+
+
+def test_html_is_never_reused_from_browser_cache(client):
+    """배포한 화면이 바로 보이게: HTML과 서비스 워커는 no-cache."""
+    assert client.get('/').headers['cache-control'] == 'no-cache'
+    assert client.get('/sw.js').headers['cache-control'] == 'no-cache'
+    assert 'no-cache' not in client.get('/icon.svg').headers.get('cache-control', '')
